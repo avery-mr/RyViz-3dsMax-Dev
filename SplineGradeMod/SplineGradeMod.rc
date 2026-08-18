@@ -1,0 +1,69 @@
+//Microsoft Developer Studio generated resource script.
+//
+#include "resource.h"
+#define APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+#include "winres.h"
+/////////////////////////////////////////////////////////////////////////////
+#undef APSTUDIO_READONLY_SYMBOLS
+/////////////////////////////////////////////////////////////////////////////
+// English (U.S.) resources
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_ENU)
+#ifdef _WIN32
+LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
+#pragma code_page(1252)
+#endif //_WIN32
+/////////////////////////////////////////////////////////////////////////////
+//
+// Dialog -- Phase 2: listbox + add/remove/move buttons, then a "selected
+// entry" group of spinners, then the global samples spinner.
+//
+IDD_SPLINEGRADE_PANEL DIALOG DISCARDABLE 0, 0, 108, 220
+STYLE WS_CHILD | WS_VISIBLE
+FONT 8, "Microsoft Sans Serif"
+BEGIN
+LTEXT           "Splines:", IDC_STATIC, 7, 6, 60, 8
+CONTROL         "", IDC_SPLINE_LIST, "LISTBOX", LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP | WS_BORDER, 7, 16, 94, 50
+
+CONTROL         "Add Spline", IDC_ADD_SPLINE, "CustButton", WS_TABSTOP, 7, 68, 94, 14
+CONTROL         "Remove Selected", IDC_REMOVE_SPLINE, "CustButton", WS_TABSTOP, 7, 84, 94, 14
+CONTROL         "Move Up", IDC_MOVE_UP, "CustButton", WS_TABSTOP, 7, 100, 46, 14
+CONTROL         "Move Down", IDC_MOVE_DOWN, "CustButton", WS_TABSTOP, 55, 100, 46, 14
+
+LTEXT           "Selected Spline:", IDC_STATIC, 7, 120, 70, 8
+
+LTEXT           "Width:", IDC_STATIC, 7, 132, 30, 8
+CONTROL         "", IDC_ENTRY_WIDTH_EDIT, "CustEdit", WS_TABSTOP, 40, 131, 47, 10
+CONTROL         "", IDC_ENTRY_WIDTH_SPIN, "SpinnerControl", 0x0, 87, 131, 8, 10
+
+LTEXT           "Falloff:", IDC_STATIC, 7, 148, 30, 8
+CONTROL         "", IDC_ENTRY_FALLOFF_EDIT, "CustEdit", WS_TABSTOP, 40, 147, 47, 10
+CONTROL         "", IDC_ENTRY_FALLOFF_SPIN, "SpinnerControl", 0x0, 87, 147, 8, 10
+
+LTEXT           "Strength:", IDC_STATIC, 7, 164, 30, 8
+CONTROL         "", IDC_ENTRY_STRENGTH_EDIT, "CustEdit", WS_TABSTOP, 40, 163, 47, 10
+CONTROL         "", IDC_ENTRY_STRENGTH_SPIN, "SpinnerControl", 0x0, 87, 163, 8, 10
+
+CONTROL         "Enabled", IDC_ENTRY_ENABLED, "Button", BS_AUTOCHECKBOX | WS_TABSTOP, 7, 178, 60, 10
+
+LTEXT           "Samples/spline:", IDC_STATIC, 7, 196, 55, 8
+CONTROL         "", IDC_SAMPLES_EDIT, "CustEdit", WS_TABSTOP, 62, 195, 25, 10
+CONTROL         "", IDC_SAMPLES_SPIN, "SpinnerControl", 0x0, 87, 195, 8, 10
+END
+/////////////////////////////////////////////////////////////////////////////
+//
+// String Table
+//
+STRINGTABLE DISCARDABLE
+BEGIN
+IDS_LIBDESCRIPTION      ""
+IDS_CATEGORY            "RyViz"
+IDS_CLASS_NAME          "RyViz Spline Grade"
+IDS_PARAMS              "Parameters"
+IDS_SPLINENODE          "Road Spline"
+IDS_WIDTH               "Width"
+IDS_FALLOFF             "Falloff"
+IDS_STRENGTH            "Strength"
+IDS_SAMPLES             "Samples"
+END
+#endif    // English (U.S.) resources

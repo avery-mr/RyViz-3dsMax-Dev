@@ -1,0 +1,44 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36408.4
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "FlattenMod", "FlattenMod\FlattenMod.vcxproj", "{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "InsetMod", "InsetMod\InsetMod.vcxproj", "{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SplineGradeMod", "SplineGradeMod\SplineGradeMod.vcxproj", "{A4CB7820-9ADB-4E77-B235-9993930D35C6}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Hybrid|x64 = Hybrid|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Debug|x64.ActiveCfg = Debug|x64
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Debug|x64.Build.0 = Debug|x64
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Hybrid|x64.ActiveCfg = Hybrid|x64
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Hybrid|x64.Build.0 = Hybrid|x64
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Release|x64.ActiveCfg = Release|x64
+		{984F7AF4-C6F0-4E2D-BBD6-474ED1AC6E93}.Release|x64.Build.0 = Release|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Debug|x64.ActiveCfg = Debug|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Debug|x64.Build.0 = Debug|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Hybrid|x64.ActiveCfg = Hybrid|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Hybrid|x64.Build.0 = Hybrid|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Release|x64.ActiveCfg = Release|x64
+		{4AFCD39A-8ED2-444E-8748-A8B9EE967F5F}.Release|x64.Build.0 = Release|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Debug|x64.ActiveCfg = Debug|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Debug|x64.Build.0 = Debug|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Hybrid|x64.ActiveCfg = Hybrid|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Hybrid|x64.Build.0 = Hybrid|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Release|x64.ActiveCfg = Release|x64
+		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Release|x64.Build.0 = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {9EFB4C9F-9EDB-4330-B298-7AD76910B2B4}
+	EndGlobalSection
+EndGlobal

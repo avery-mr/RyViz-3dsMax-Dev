@@ -27,6 +27,9 @@
   <ImportGroup Label="PropertySheets">
     <Import Project="$(MaxSDK)\ProjectSettings\PropertySheets\3dsmax.cpp.props" />
   </ImportGroup>
+  <ImportGroup Label="PropertySheets">
+    <Import Project="..\Shared\RyViz-MaxSDK.props" />
+  </ImportGroup>
   <PropertyGroup>
     <_ProjectFileVersion>10.0.30319.1</_ProjectFileVersion>
     <OutDir Condition="'$(Platform)'=='x64'">..\..\..\..\..\..\Program Files\Autodesk\3ds Max 2027\Plugins</OutDir>
@@ -42,8 +45,6 @@
       <WarningLevel>Level4</WarningLevel>
     </ClCompile>
     <Link>
-      <AdditionalLibraryDirectories>C:\Program Files\Autodesk\3ds Max 2027 SDK\maxsdk\lib\x64\Release;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalDependencies>bmm.lib;core.lib;Geom.lib;gfx.lib;mesh.lib;maxutil.lib;maxscrpt.lib;manipsys.lib;paramblk2.lib;mnmath.lib;poly.lib;;%(AdditionalDependencies)</AdditionalDependencies>
       <ModuleDefinitionFile>FlattenMod.def</ModuleDefinitionFile>
       <OutputFile Condition="'$(Configuration)|$(Platform)'=='Release|x64'">$(OutDir)$(TargetName)$(TargetExt)</OutputFile>
     </Link>
