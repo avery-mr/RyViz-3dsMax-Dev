@@ -2,9 +2,9 @@
 	TiltUpPanel.cpp
 
 	Phase 2: MNMesh cut-grid. Reveal strips are unions of front-face
-	cells. The base wall is a complete box of thickness `depth` with
-	the full front grid left intact. Field cells get additional
-	extrusion boxes sitting on those front quads (grooveDepth).
+	cells. The base wall is a box of thickness `depth`. Reveal cells
+	keep front quads (groove floor). Field cells share one outer grid
+	at grooveDepth and boundary walls only — one welded element.
 */
 
 #include "TiltUpPanel.h"
@@ -179,6 +179,13 @@ static BOOL CellInReveal(float cx, float cz, const PanelBuildInput& in)
 	return FALSE;
 }
 
+static BOOL CellIsField(int i, int k, const Tab<float>& xs, const Tab<float>& zs, const PanelBuildInput& in)
+{
+	float cx = 0.5f * (xs[i] + xs[i + 1]);
+	float cz = 0.5f * (zs[k] + zs[k + 1]);
+	return !CellInReveal(cx, cz, in);
+}
+
 static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 {
 	mm.Clear();
@@ -241,16 +248,30 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 	const DWORD smLeft = (1 << 6);
 	const DWORD smRight = (1 << 7);
 
+	BOOL doRelief = (nRev > 0 && in.grooveD > kCutEps && half > kCutEps);
+
+	Tab<BOOL> isField;
+	isField.SetCount(ncx * ncz);
+	for (int k = 0; k < ncz; ++k)
+	{
+		for (int i = 0; i < ncx; ++i)
+			isField[k * ncx + i] = doRelief ? CellIsField(i, k, xs, zs, in) : FALSE;
+	}
+
 	for (int k = 0; k < ncz; ++k)
 	{
 		for (int i = 0; i < ncx; ++i)
 		{
-			AddMNQuad(mm,
-				GridVert(nx, i, k, frontBase),
-				GridVert(nx, i, k + 1, frontBase),
-				GridVert(nx, i + 1, k + 1, frontBase),
-				GridVert(nx, i + 1, k, frontBase),
-				smFront);
+			// Groove floor on reveal cells only when relieving; else full front.
+			if (!doRelief || !isField[k * ncx + i])
+			{
+				AddMNQuad(mm,
+					GridVert(nx, i, k, frontBase),
+					GridVert(nx, i, k + 1, frontBase),
+					GridVert(nx, i + 1, k + 1, frontBase),
+					GridVert(nx, i + 1, k, frontBase),
+					smFront);
+			}
 			AddMNQuad(mm,
 				GridVert(nx, i, k, backBase),
 				GridVert(nx, i + 1, k, backBase),
@@ -292,17 +313,34 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 			smTop);
 	}
 
-	BOOL doRelief = (nRev > 0 && in.grooveD > kCutEps && half > kCutEps);
 	if (doRelief)
 	{
 		const float yOut = in.depth + in.grooveD;
+		Tab<int> outerId;
+		outerId.SetCount(nx * nz);
+		for (int v = 0; v < nx * nz; ++v)
+			outerId[v] = -1;
+
+		auto OuterVert = [&](int i, int k) -> int
+		{
+			int idx = k * nx + i;
+			if (outerId[idx] < 0)
+				outerId[idx] = mm.NewVert(Point3(xs[i], yOut, zs[k]));
+			return outerId[idx];
+		};
+
+		auto NeighborIsField = [&](int ni, int nk) -> BOOL
+		{
+			if (ni < 0 || nk < 0 || ni >= ncx || nk >= ncz)
+				return FALSE;
+			return isField[nk * ncx + ni];
+		};
+
 		for (int k = 0; k < ncz; ++k)
 		{
-			float cz = 0.5f * (zs[k] + zs[k + 1]);
 			for (int i = 0; i < ncx; ++i)
 			{
-				float cx = 0.5f * (xs[i] + xs[i + 1]);
-				if (CellInReveal(cx, cz, in))
+				if (!isField[k * ncx + i])
 					continue;
 
 				int f00 = GridVert(nx, i, k, frontBase);
@@ -310,16 +348,22 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 				int f11 = GridVert(nx, i + 1, k + 1, frontBase);
 				int f10 = GridVert(nx, i + 1, k, frontBase);
 
-				int e00 = mm.NewVert(Point3(xs[i], yOut, zs[k]));
-				int e01 = mm.NewVert(Point3(xs[i], yOut, zs[k + 1]));
-				int e11 = mm.NewVert(Point3(xs[i + 1], yOut, zs[k + 1]));
-				int e10 = mm.NewVert(Point3(xs[i + 1], yOut, zs[k]));
+				int e00 = OuterVert(i, k);
+				int e01 = OuterVert(i, k + 1);
+				int e11 = OuterVert(i + 1, k + 1);
+				int e10 = OuterVert(i + 1, k);
 
 				AddMNQuad(mm, e00, e01, e11, e10, smPanel);
-				AddMNQuad(mm, f00, e00, e10, f10, smWall);
-				AddMNQuad(mm, f01, f11, e11, e01, smWall);
-				AddMNQuad(mm, f00, f01, e01, e00, smWall);
-				AddMNQuad(mm, f10, e10, e11, f11, smWall);
+
+				// Walls only on field/reveal or field/perimeter edges.
+				if (!NeighborIsField(i, k - 1))
+					AddMNQuad(mm, f00, e00, e10, f10, smWall);
+				if (!NeighborIsField(i, k + 1))
+					AddMNQuad(mm, f01, f11, e11, e01, smWall);
+				if (!NeighborIsField(i - 1, k))
+					AddMNQuad(mm, f00, f01, e01, e00, smWall);
+				if (!NeighborIsField(i + 1, k))
+					AddMNQuad(mm, f10, e10, e11, f11, smWall);
 			}
 		}
 	}

@@ -15,21 +15,25 @@ MNMesh cut-grid. Reveals are axis + position only (`revealAxis`,
 `revealPos`). Groove width and depth are **global** (`grooveWidth`,
 `grooveDepth`).
 
-`depth` is the base wall. The base is always a complete box of that
-thickness with the full front cut-grid (every reveal loop stays on that
-front). Field cells then get **new** extrusion boxes sitting on those
-front quads (`grooveDepth`). Original front faces under the panels are
-kept. No reveals (or zero groove size) → just the boxed grid.
+`depth` is the base wall. The base is a box of that thickness. Reveal
+cells keep their front quads (groove floor). Field cells share one
+outer grid at `grooveDepth` with walls only on field/reveal and
+field/perimeter edges — a single welded element (no duplicate verts or
+overlapping front faces under panels). No reveals (or zero groove
+size) → just the boxed grid.
 
 Crossing = union of strip cells; those cells are not extruded, so the
-plus-shaped floor is the original front grid.
+plus-shaped floor is the original front grid on reveal cells.
 
 **Verify:**
-1. No reveals — box of thickness Depth. Convert to Poly; quads.
-2. Add Horiz / Add Vert — original front loops still visible in the
-   grooves and under the panels; each field is a separate extrusion.
-3. Groove W / Groove D change every reveal together.
-4. Depth is the structural minimum; it does not get carved through.
+1. No reveals — box of thickness Depth. Convert to Poly; quads; one
+   element.
+2. Add Horiz / Add Vert — groove loops on the base front; field regions
+   share outer-grid verts; Convert to Poly → Element = **1**.
+3. At a former triple-vert corner: one front vert (groove) and one
+   outer-grid vert.
+4. Groove W / Groove D change every reveal together.
+5. Depth is the structural minimum; it does not get carved through.
 
 MAXScript: `.revealAxis`, `.revealPos`, `.grooveWidth`, `.grooveDepth`.
 Axis 0 = horizontal (Z), 1 = vertical (X).
