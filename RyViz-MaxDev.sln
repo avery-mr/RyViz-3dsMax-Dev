@@ -9,6 +9,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "InsetMod", "InsetMod\InsetM
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "SplineGradeMod", "SplineGradeMod\SplineGradeMod.vcxproj", "{A4CB7820-9ADB-4E77-B235-9993930D35C6}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "TiltUpPanel", "TiltUpPanel\TiltUpPanel.vcxproj", "{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -34,6 +36,12 @@ Global
 		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Hybrid|x64.Build.0 = Hybrid|x64
 		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Release|x64.ActiveCfg = Release|x64
 		{A4CB7820-9ADB-4E77-B235-9993930D35C6}.Release|x64.Build.0 = Release|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Debug|x64.ActiveCfg = Debug|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Debug|x64.Build.0 = Debug|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Hybrid|x64.ActiveCfg = Hybrid|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Hybrid|x64.Build.0 = Hybrid|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Release|x64.ActiveCfg = Release|x64
+		{C8E3A1F4-7B2D-4E91-9C6A-2F5D8B0A1743}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

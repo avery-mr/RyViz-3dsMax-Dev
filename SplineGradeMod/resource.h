@@ -11,6 +11,7 @@
 #define IDS_FALLOFF                    7
 #define IDS_STRENGTH                   8
 #define IDS_SAMPLES                    9
+#define IDS_PICK_SPLINE                10
 
 #define IDD_SPLINEGRADE_PANEL          101
 

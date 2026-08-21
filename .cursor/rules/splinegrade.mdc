@@ -1,0 +1,24 @@
+---
+description: SplineGradeMod lessons — apply when editing SplineGradeMod files.
+globs: SplineGradeMod/**
+alwaysApply: false
+---
+
+# SplineGradeMod
+
+Not the active project. FlattenMod is shipped and off-limits.
+
+Read `SplineGradeMod/SplineGradeMod_Handoff.md` before changing pick, paramblock, sampling, or `ModifyObject`. Those lessons were paid for in crashes. The working MAXScript reference is `SplineGradeMod/splinegrade_mod_prototype.ms`.
+
+Hard rules:
+- Do not reintroduce a hand-rolled `PickModeCallback` for Add Spline. Use `TYPE_NODELISTBOX` / Max's picker (Phase 1 path). Custom pick crashed in Max 2027.
+- Do not run MSBuild or copy the `.dlm`. The user builds Hybrid | x64 from Visual Studio.
+
+Hard rules:
+- C++ spline samples from `MakePolyShape` / `EvalWorldState` are **object space** — multiply by `splineNode->GetNodeTM(t)` for world. MAXScript `interpCurve3D` is already world; do not copy that convention here.
+- Mesh verts in `ModifyObject`: `node ? node->GetNodeTM(t) : (mc.tm ? *mc.tm : Matrix3())`. `node` is often null. `mc.tm` is not the node TM.
+- OSM will not re-run on a pure host-node move. That is accepted. Do not "fix" it with a different matrix. A Space Warp is the v2 tool.
+- ParamBlockDesc2 4th arg is `&splinegrademodDesc`, terminator is `p_end`. Tab params need `P_VARIABLE_SIZE`.
+- `Filter(INode*)` is `PickNodeCallback`. Do not call `EvalWorldState` inside Filter/HitTest. No `MessageBox` in ctor, `HitTest`, `Filter`, or `Pick`.
+- Verify unknown SDK signatures with Go to Definition in this Max 2027 SDK, not memory.
+- Algorithm: XY-only closest point on sampled polyline, lerp Z by width/falloff/strength, cascade in list order.

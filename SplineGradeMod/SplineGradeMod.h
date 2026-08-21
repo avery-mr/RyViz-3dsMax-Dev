@@ -2,27 +2,22 @@
 	SplineGradeMod.h
 
 	Phase 2: multi-spline list management, porting the ordering/cascading
-	behavior validated in RyViz_SplineGradeProto.ms (v2) into the C++
+	behavior validated in splinegrade_mod_prototype.ms (v2) into the C++
 	modifier. Each entry (spline node, width, falloff, strength, enabled)
 	lives in parallel Tab<> paramblock arrays, applied in list order --
 	later entries deform the RESULT of earlier ones (cascading stack
 	behavior), same as the prototype.
 
-	ARCHITECTURE CHANGE FROM PHASE 1: P_AUTO_UI is dropped entirely. Auto-UI
-	binds one control directly to one scalar parameter -- it has no notion
-	of "edit whichever list entry is currently selected," which is exactly
-	what a variable-length spline list needs. Instead:
-		- The rollout dialog is created manually (ip->AddRollupPage) with a
-		  classic DialogProc, not an auto-bound ParamMap2 dialog.
-		- Spinners are wired up manually via GetISpinner()/SetupFloatSpinner
-		  on dialog controls -- NOT via p_ui tags in the paramblock.
-		- The "Add Spline" button uses a hand-written PickModeCallback
-		  (CommandMode-based node picking) instead of TYPE_PICKNODEBUTTON,
-		  since that auto-UI tag doesn't apply here either.
+	ARCHITECTURE: P_AUTO_UI drives the spline list and Add/Remove pick
+	buttons via TYPE_NODELISTBOX (Max's own picker -- the same path that
+	worked in Phase 1). A hand-rolled PickModeCallback crashed on viewport
+	pick in Max 2027. Per-entry width/falloff/strength stay manual because
+	auto-UI cannot bind one spinner to "the currently selected tab index":
+		- Extra rollup controls (Move Up/Down, selected-entry spinners)
+		  are handled in a ParamMap2UserDlgProc.
 		- Selecting a listbox entry pushes that entry's Tab values into the
 		  spinners; editing a spinner writes back into the Tab at the
-		  selected index. This mirrors the prototype's loadSelectedEntryToUI
-		  / spnEntryWidth-changed-handler pattern exactly, just in C++.
+		  selected index.
 
 	CONFIDENCE NOTE: the paramblock Tab plumbing and ModifyObject cascade
 	loop are a direct, well-understood port of validated logic. The manual
@@ -92,6 +87,9 @@ public:
 
 	int selectedIndex;		// currently selected listbox entry, -1 = none
 	HWND hPanel;			// dialog HWND, valid only while the rollout is open
+	ISpinnerControl* spinWidth;
+	ISpinnerControl* spinFalloff;
+	ISpinnerControl* spinStrength;
 
 	SplineGradeMod();
 	~SplineGradeMod();
@@ -99,7 +97,7 @@ public:
 	void DeleteThis() override { delete this; }
 	Class_ID ClassID() override { return SPLINEGRADEMOD_CLASS_ID; }
 	SClass_ID SuperClassID() override { return OSM_CLASS_ID; }
-	void GetClassName(MSTR& s, bool localized = true) const override { s = MSTR(_M("SplineGradeMod")); }
+	void GetClassName(MSTR& s, bool localized = true) const override { s = MSTR(_M("RySplineGrade")); }
 
 	int NumParamBlocks() override { return 1; }
 	IParamBlock2* GetParamBlock(int i) override { return pblock; }
@@ -124,7 +122,7 @@ public:
 	Interval LocalValidity(TimeValue t) override;
 
 	CreateMouseCallBack* GetCreateMouseCallBack() override { return nullptr; }
-	const MCHAR* GetObjectName(bool localized) const override { return _M("RyViz Spline Grade"); }
+	const MCHAR* GetObjectName(bool localized) const override { return _M("RySplineGrade"); }
 
 	RefTargetHandle Clone(RemapDir& remap) override;
 
@@ -134,30 +132,15 @@ public:
 	void AddSplineEntry(INode* splineNode);
 	void RemoveSelectedEntry();
 	void MoveSelectedEntry(int direction);	// -1 = up, +1 = down
+	void SyncParallelTabs();				// keep width/falloff/strength/enabled tabs aligned with splineNodes
+	int SyncSelectionFromList();			// LB_GETCURSEL → selectedIndex
+	void InitEntryControls();				// hook per-entry spinners after ParamMap2 exists
 
 private:
-	void SampleSplineToPolyline(INode* splineNode, TimeValue t, int numSamples, Tab<Point3>& outPts);
-	float ClosestPointOnPolylineXY(const Point3& p, const Tab<Point3>& polyline, float& outTargetZ);
+	void SampleSplineToPolyline(INode* splineNode, TimeValue t, int numSamples, Tab<Point3>& outPts, bool& outClosed);
+	float ClosestPointOnPolylineXY(const Point3& p, const Tab<Point3>& polyline, bool closed, float& outTargetZ);
+	bool PointInPolygonXY(const Point3& p, const Tab<Point3>& polyline);
+	bool FitPlaneXY(const Tab<Point3>& pts, float& outA, float& outB, float& outC);
+	void DeformWorldPositions(Tab<Point3>& working, const BitArray& vertActive, TimeValue t);
 	float FalloffWeight(float lateralDist, float halfWidth, float falloffDist);
-};
-
-// PickModeCallback + PickNodeCallback on the same object is the SDK
-// sample pattern (Linked XForm, Skin Wrap, Morpher). Filter must NOT
-// call EvalWorldState -- that re-enters the pipeline during hit-testing
-// and is the usual crash when clicking a spline in pick mode.
-class SplineGradeAddSplinePick : public PickModeCallback, public PickNodeCallback
-{
-public:
-	SplineGradeMod* mod;
-	INode* hitNode;
-
-	SplineGradeAddSplinePick() : mod(nullptr), hitNode(nullptr) {}
-
-	BOOL HitTest(IObjParam* ip, HWND hWnd, ViewExp* vpt, IPoint2 m, int flags) override;
-	BOOL Pick(IObjParam* ip, ViewExp* vpt) override;
-	BOOL Filter(INode* node) override;
-	PickNodeCallback* GetFilter() override { return this; }
-	BOOL RightClick(IObjParam* /*ip*/, ViewExp* /*vpt*/) override { return TRUE; }
-	void EnterMode(IObjParam* ip) override;
-	void ExitMode(IObjParam* ip) override;
 };

@@ -1,0 +1,24 @@
+---
+description: TiltUpPanel is the active RyViz plugin — follow the spec and handoff.
+alwaysApply: true
+---
+
+# TiltUpPanel
+
+Active project. FlattenMod is shipped and off-limits. SplineGradeMod is a
+separate plugin — do not edit it unless asked. InsetMod is on hold (prior
+art for Phase 2 reveal carve).
+
+Read `TiltUpPanel/TiltUpPanel_Handoff.md` before changing create-mouse,
+paramblock, or `BuildMesh`. Spec: `TiltUpPanel/TiltUpPanel_ProjectSpec.md`.
+
+Hard rules:
+- Object plugin: `SimpleObject2`, output `.dlo` (not `.dlm`).
+- Do not run MSBuild or copy the `.dlo`. User builds Hybrid | x64 from Visual Studio.
+- `BuildMesh()` regenerates from the pblock every time. No cached mesh. No boolean solver.
+- ParamBlockDesc2 4th arg is `&tiltUpPanelDesc`, terminator is `p_end`. Tab params need `P_VARIABLE_SIZE`.
+- Local space: X = width, Y = thickness, Z = height. Origin = lower-left-back. Base front at y = depth; panel caps at y = depth + grooveDepth.
+- Python editor (Phase 3) writes pblock only — never touches geometry.
+- Verify unknown SDK signatures with Go to Definition in this Max 2027 SDK, not memory.
+- Groove width/depth are global scalars. Reveals are axis + position Tabs only.
+- Build the base box with the full front grid first. Panel extrusions are additional geometry; do not move or delete those front quads. Do not reintroduce a boolean solver.

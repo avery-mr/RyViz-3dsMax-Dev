@@ -27,8 +27,8 @@ CONTROL         "", IDC_SPLINE_LIST, "LISTBOX", LBS_NOTIFY | WS_VSCROLL | WS_TAB
 
 CONTROL         "Add Spline", IDC_ADD_SPLINE, "CustButton", WS_TABSTOP, 7, 68, 94, 14
 CONTROL         "Remove Selected", IDC_REMOVE_SPLINE, "CustButton", WS_TABSTOP, 7, 84, 94, 14
-CONTROL         "Move Up", IDC_MOVE_UP, "CustButton", WS_TABSTOP, 7, 100, 46, 14
-CONTROL         "Move Down", IDC_MOVE_DOWN, "CustButton", WS_TABSTOP, 55, 100, 46, 14
+CONTROL         "Move Up", IDC_MOVE_UP, "Button", WS_TABSTOP, 7, 100, 46, 14
+CONTROL         "Move Down", IDC_MOVE_DOWN, "Button", WS_TABSTOP, 55, 100, 46, 14
 
 LTEXT           "Selected Spline:", IDC_STATIC, 7, 120, 70, 8
 
@@ -58,12 +58,13 @@ STRINGTABLE DISCARDABLE
 BEGIN
 IDS_LIBDESCRIPTION      ""
 IDS_CATEGORY            "RyViz"
-IDS_CLASS_NAME          "RyViz Spline Grade"
+IDS_CLASS_NAME          "RySplineGrade"
 IDS_PARAMS              "Parameters"
 IDS_SPLINENODE          "Road Spline"
 IDS_WIDTH               "Width"
 IDS_FALLOFF             "Falloff"
 IDS_STRENGTH            "Strength"
 IDS_SAMPLES             "Samples"
+IDS_PICK_SPLINE         "Pick a spline"
 END
 #endif    // English (U.S.) resources
