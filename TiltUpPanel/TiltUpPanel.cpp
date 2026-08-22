@@ -83,6 +83,16 @@ static ParamBlockDesc2 tiltUpPanel_paramblock(
 		p_ui, TYPE_SPINNER, EDITTYPE_UNIVERSE, IDC_GROOVE_D_EDIT, IDC_GROOVE_D_SPIN, SPIN_AUTOSCALE,
 		p_end,
 
+	pb_edgeSides, _T("edgeSides"), TYPE_BOOL, 0, IDS_EDGE_SIDES,
+		p_default, FALSE,
+		p_ui, TYPE_SINGLECHEKBOX, IDC_EDGE_SIDES,
+		p_end,
+
+	pb_edgeTopBot, _T("edgeTopBot"), TYPE_BOOL, 0, IDS_EDGE_TOPBOT,
+		p_default, FALSE,
+		p_ui, TYPE_SINGLECHEKBOX, IDC_EDGE_TOPBOT,
+		p_end,
+
 	p_end
 );
 
@@ -143,6 +153,8 @@ struct PanelBuildInput
 	float depth;
 	float grooveW;
 	float grooveD;
+	BOOL edgeSides;
+	BOOL edgeTopBot;
 	Tab<int> axis;
 	Tab<float> pos;
 };
@@ -373,6 +385,34 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 	mm.FillInMesh();
 }
 
+static void AppendEdgeReveals(PanelBuildInput& in)
+{
+	float half = in.grooveW * 0.5f;
+	if (half <= kCutEps)
+		return;
+
+	if (in.edgeSides)
+	{
+		int axisV = 1;
+		float left = 0.0f;
+		float right = in.width;
+		in.axis.Append(1, &axisV);
+		in.pos.Append(1, &left);
+		in.axis.Append(1, &axisV);
+		in.pos.Append(1, &right);
+	}
+	if (in.edgeTopBot)
+	{
+		int axisH = 0;
+		float bottom = 0.0f;
+		float top = in.height;
+		in.axis.Append(1, &axisH);
+		in.pos.Append(1, &bottom);
+		in.axis.Append(1, &axisH);
+		in.pos.Append(1, &top);
+	}
+}
+
 static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, PanelBuildInput& in)
 {
 	in.width = 0.0f;
@@ -380,6 +420,8 @@ static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, Panel
 	in.depth = 0.0f;
 	in.grooveW = 0.0f;
 	in.grooveD = 0.0f;
+	in.edgeSides = FALSE;
+	in.edgeTopBot = FALSE;
 	in.axis.ZeroCount();
 	in.pos.ZeroCount();
 	if (!pb)
@@ -390,6 +432,12 @@ static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, Panel
 	pb->GetValue(pb_depth, t, in.depth, valid);
 	pb->GetValue(pb_grooveWidth, t, in.grooveW, valid);
 	pb->GetValue(pb_grooveDepth, t, in.grooveD, valid);
+	int edgeSides = 0;
+	int edgeTopBot = 0;
+	pb->GetValue(pb_edgeSides, t, edgeSides, valid);
+	pb->GetValue(pb_edgeTopBot, t, edgeTopBot, valid);
+	in.edgeSides = edgeSides ? TRUE : FALSE;
+	in.edgeTopBot = edgeTopBot ? TRUE : FALSE;
 
 	int n = pb->Count(pb_revealAxis);
 	int nPos = pb->Count(pb_revealPos);
@@ -408,6 +456,8 @@ static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, Panel
 		in.axis[i] = axis;
 		in.pos[i] = pos;
 	}
+
+	AppendEdgeReveals(in);
 }
 
 // ---------------------------------------------------------------------

@@ -15,12 +15,17 @@ MNMesh cut-grid. Reveals are axis + position only (`revealAxis`,
 `revealPos`). Groove width and depth are **global** (`grooveWidth`,
 `grooveDepth`).
 
+`edgeSides` / `edgeTopBot` inject half-width edge reveals at the
+panel bounds (not listed in the reveal UI). L/R uses vertical strips
+at X=0 and X=width so adjacent panels form a full groove at the joint.
+T/B does the same at Z=0 and Z=height.
+
 `depth` is the base wall. The base is a box of that thickness. Reveal
 cells keep their front quads (groove floor). Field cells share one
 outer grid at `grooveDepth` with walls only on field/reveal and
 field/perimeter edges — a single welded element (no duplicate verts or
-overlapping front faces under panels). No reveals (or zero groove
-size) → just the boxed grid.
+overlapping front faces under panels). No reveals / edge insets (or
+zero groove size) → just the boxed grid.
 
 Crossing = union of strip cells; those cells are not extruded, so the
 plus-shaped floor is the original front grid on reveal cells.
@@ -34,9 +39,12 @@ plus-shaped floor is the original front grid on reveal cells.
    outer-grid vert.
 4. Groove W / Groove D change every reveal together.
 5. Depth is the structural minimum; it does not get carved through.
+6. Inset L/R alone — fields start half Groove W in from each side;
+   two panels side-by-side meet as one full-width reveal.
+7. Inset T/B optional — same for top/bottom.
 
-MAXScript: `.revealAxis`, `.revealPos`, `.grooveWidth`, `.grooveDepth`.
-Axis 0 = horizontal (Z), 1 = vertical (X).
+MAXScript: `.revealAxis`, `.revealPos`, `.grooveWidth`, `.grooveDepth`,
+`.edgeSides`, `.edgeTopBot`. Axis 0 = horizontal (Z), 1 = vertical (X).
 
 Phase 3 is still the floating Python 2D editor (modeless, pblock in/out,
 no geometry writes). This rollout is the interim authoring UI.
