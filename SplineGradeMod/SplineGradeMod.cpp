@@ -1,5 +1,3 @@
-// Cursor sync check — file is live in the RyViz-MaxDev workspace.
-
 /*
 	SplineGradeMod.cpp
 
