@@ -87,6 +87,9 @@ public:
 	void LoadSelectedRevealToUI();
 	void WriteRevealSpinnersToPblock(TimeValue t);
 	int SyncSelectionFromList();
+	void LaunchRevealLayoutEditor();
+
+	static IObjParam* editIp;
 
 	friend class TiltUpPanelCreateCallBack;
 };

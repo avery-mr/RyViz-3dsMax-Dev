@@ -17,7 +17,7 @@ LANGUAGE LANG_ENGLISH, SUBLANG_ENGLISH_US
 //
 // Dialog -- Phase 2: panel size + global groove + reveal list.
 //
-IDD_TILTUP_PANEL DIALOG DISCARDABLE 0, 0, 108, 246
+IDD_TILTUP_PANEL DIALOG DISCARDABLE 0, 0, 108, 262
 STYLE WS_CHILD | WS_VISIBLE
 FONT 8, "Microsoft Sans Serif"
 BEGIN
@@ -54,6 +54,8 @@ CONTROL         "Remove", IDC_REMOVE_REVEAL, "Button", WS_TABSTOP, 7, 188, 94, 1
 LTEXT           "Position:", IDC_STATIC, 7, 208, 40, 8
 CONTROL         "", IDC_REVEAL_POS_EDIT, "CustEdit", WS_TABSTOP, 48, 207, 39, 10
 CONTROL         "", IDC_REVEAL_POS_SPIN, "SpinnerControl", 0x0, 87, 207, 8, 10
+
+CONTROL         "Edit Reveal Layout...", IDC_EDIT_LAYOUT, "Button", WS_TABSTOP, 7, 224, 94, 14
 END
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -74,5 +76,6 @@ IDS_GROOVE_WIDTH            "Groove Width"
 IDS_GROOVE_DEPTH            "Groove Depth"
 IDS_EDGE_SIDES              "Inset L/R"
 IDS_EDGE_TOPBOT             "Inset T/B"
+IDS_EDIT_LAYOUT             "Edit Reveal Layout"
 END
 #endif    // English (U.S.) resources

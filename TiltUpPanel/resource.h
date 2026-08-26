@@ -14,6 +14,7 @@
 #define IDS_GROOVE_DEPTH                11
 #define IDS_EDGE_SIDES                  12
 #define IDS_EDGE_TOPBOT                 13
+#define IDS_EDIT_LAYOUT                 14
 
 #define IDD_TILTUP_PANEL                101
 
@@ -39,3 +40,5 @@
 #define IDC_REMOVE_REVEAL               1014
 #define IDC_REVEAL_POS_EDIT             1015
 #define IDC_REVEAL_POS_SPIN             1016
+
+#define IDC_EDIT_LAYOUT                 1019

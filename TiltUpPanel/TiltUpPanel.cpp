@@ -11,14 +11,69 @@
 #include "polyobj.h"
 #include "mnmesh.h"
 #include "custcont.h"
+#include "maxscript/maxscript.h"
 #include <cmath>
+#include <io.h>
 #include <tchar.h>
 
 #define PBLOCK_REF 0
 
+IObjParam* TiltUpPanel::editIp = nullptr;
+
 static const float kCutEps = 1.0e-4f;
 static const float kDefaultGrooveW = 2.0f;
 static const float kDefaultGrooveD = 0.5f;
+
+static MSTR EscapeForMaxScriptPath(const MSTR& path)
+{
+	MSTR out;
+	for (int i = 0; i < path.Length(); ++i)
+	{
+		if (path[i] == _T('\\'))
+			out += _T("\\\\");
+		else
+			out += path[i];
+	}
+	return out;
+}
+
+static bool ResolveEditorScriptPath(MSTR& outPath)
+{
+	TCHAR envVar[MAX_PATH];
+	DWORD envLen = GetEnvironmentVariable(_T("RYVIZ_TILTUP_EDITOR"), envVar, MAX_PATH);
+	if (envLen > 0 && envLen < MAX_PATH)
+	{
+		outPath = envVar;
+		if (_taccess(outPath, 0) == 0)
+			return true;
+	}
+
+	TCHAR modulePath[MAX_PATH];
+	if (!GetModuleFileName(hInstance, modulePath, MAX_PATH))
+		return false;
+
+	MSTR dir(modulePath);
+	int lastSlash = dir.last(_T('\\'));
+	if (lastSlash >= 0)
+		dir = dir.Substr(0, lastSlash + 1);
+
+	static const TCHAR* kCandidates[] = {
+		_T("TiltUpPanel\\python\\tilt_up_panel_editor.py"),
+		_T("RyViz\\tilt_up_panel_editor.py"),
+		_T("tilt_up_panel_editor.py"),
+	};
+
+	for (const TCHAR* suffix : kCandidates)
+	{
+		MSTR candidate = dir + suffix;
+		if (_taccess(candidate, 0) == 0)
+		{
+			outPath = candidate;
+			return true;
+		}
+	}
+	return false;
+}
 
 class TiltUpPanelClassDesc : public ClassDesc2
 {
@@ -515,6 +570,10 @@ INT_PTR TiltUpPanelDlgProc::DlgProc(TimeValue t, IParamMap2* /*map*/, HWND hWnd,
 			if (HIWORD(wParam) == BN_CLICKED)
 				ob->RemoveSelectedReveal();
 			return TRUE;
+		case IDC_EDIT_LAYOUT:
+			if (HIWORD(wParam) == BN_CLICKED)
+				ob->LaunchRevealLayoutEditor();
+			return TRUE;
 		case IDC_REVEAL_LIST:
 			if (HIWORD(wParam) == LBN_SELCHANGE)
 			{
@@ -685,6 +744,45 @@ void TiltUpPanel::WriteRevealSpinnersToPblock(TimeValue t)
 		pblock2->SetValue(pb_revealPos, t, spinRevealPos->GetFVal(), selectedIndex);
 }
 
+void TiltUpPanel::LaunchRevealLayoutEditor()
+{
+	if (!editIp)
+		return;
+
+	INode* node = nullptr;
+	for (int i = 0; i < editIp->GetSelNodeCount(); ++i)
+	{
+		INode* n = editIp->GetSelNode(i);
+		if (n && n->GetObjectRef() == this)
+		{
+			node = n;
+			break;
+		}
+	}
+	if (!node)
+		return;
+
+	const ULONG handle = node->GetHandle();
+	MSTR ms;
+	MSTR scriptPath;
+	if (ResolveEditorScriptPath(scriptPath))
+	{
+		MSTR escaped = EscapeForMaxScriptPath(scriptPath);
+		ms.printf(_T("global RyViz_TiltUpPanel_EditNodeHandle = %lu\n")
+			_T("python.ExecuteFile @\"%s\""),
+			handle, escaped.data());
+	}
+	else
+	{
+		ms.printf(_T("global RyViz_TiltUpPanel_EditNodeHandle = %lu\n")
+			_T("local p = getEnvVariable \"RYVIZ_TILTUP_EDITOR\"\n")
+			_T("if p == undefined do p = (getDir #userScripts) + \"\\\\RyViz\\\\tilt_up_panel_editor.py\"\n")
+			_T("python.ExecuteFile p"),
+			handle);
+	}
+	ExecuteMAXScriptScript(ms, MAXScript::ScriptSource::NonEmbedded, TRUE);
+}
+
 // ---------------------------------------------------------------------
 // Object
 // ---------------------------------------------------------------------
@@ -701,6 +799,7 @@ TiltUpPanel::~TiltUpPanel()
 
 void TiltUpPanel::BeginEditParams(IObjParam* ip, ULONG flags, Animatable* prev)
 {
+	editIp = ip;
 	SimpleObject2::BeginEditParams(ip, flags, prev);
 	GetTiltUpPanelDesc()->BeginEditParams(ip, this, flags, prev);
 	tiltUpPanel_paramblock.SetUserDlgProc(new TiltUpPanelDlgProc(this));
@@ -716,6 +815,7 @@ void TiltUpPanel::EndEditParams(IObjParam* ip, ULONG flags, Animatable* next)
 {
 	if (spinRevealPos) { ReleaseISpinner(spinRevealPos); spinRevealPos = nullptr; }
 	hPanel = nullptr;
+	editIp = nullptr;
 
 	SimpleObject2::EndEditParams(ip, flags, next);
 	GetTiltUpPanelDesc()->EndEditParams(ip, this, flags, next);
