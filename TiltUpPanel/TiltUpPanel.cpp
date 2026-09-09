@@ -24,17 +24,16 @@ static const float kCutEps = 1.0e-4f;
 static const float kDefaultGrooveW = 2.0f;
 static const float kDefaultGrooveD = 0.5f;
 
-static MSTR EscapeForMaxScriptPath(const MSTR& path)
+static void NotifyUser(const TCHAR* msg)
 {
-	MSTR out;
-	for (int i = 0; i < path.Length(); ++i)
-	{
-		if (path[i] == _T('\\'))
-			out += _T("\\\\");
-		else
-			out += path[i];
-	}
-	return out;
+	Interface* ip = GetCOREInterface();
+	HWND hwnd = ip ? ip->GetMAXHWnd() : nullptr;
+	MessageBox(hwnd, msg, _T("RyViz TiltUpPanel"), MB_OK | MB_ICONINFORMATION);
+}
+
+static bool FileExists(const MSTR& path)
+{
+	return path.Length() > 0 && _taccess(path, 0) == 0;
 }
 
 static bool ResolveEditorScriptPath(MSTR& outPath)
@@ -44,7 +43,28 @@ static bool ResolveEditorScriptPath(MSTR& outPath)
 	if (envLen > 0 && envLen < MAX_PATH)
 	{
 		outPath = envVar;
-		if (_taccess(outPath, 0) == 0)
+		if (FileExists(outPath))
+			return true;
+	}
+
+	// Dev default: source tree next to this repo (plugin .dlo lives in Max Plugins).
+	static const TCHAR* kFixedCandidates[] = {
+		_T("C:\\Users\\mavery\\source\\MaxDev\\RyViz-MaxDev\\TiltUpPanel\\python\\tilt_up_panel_editor.py"),
+	};
+	for (const TCHAR* fixed : kFixedCandidates)
+	{
+		outPath = fixed;
+		if (FileExists(outPath))
+			return true;
+	}
+
+	TCHAR userProfile[MAX_PATH];
+	DWORD profileLen = GetEnvironmentVariable(_T("USERPROFILE"), userProfile, MAX_PATH);
+	if (profileLen > 0 && profileLen < MAX_PATH)
+	{
+		outPath = MSTR(userProfile) +
+			_T("\\Documents\\3ds Max 2027\\scripts\\RyViz\\tilt_up_panel_editor.py");
+		if (FileExists(outPath))
 			return true;
 	}
 
@@ -57,22 +77,42 @@ static bool ResolveEditorScriptPath(MSTR& outPath)
 	if (lastSlash >= 0)
 		dir = dir.Substr(0, lastSlash + 1);
 
-	static const TCHAR* kCandidates[] = {
+	static const TCHAR* kRelCandidates[] = {
 		_T("TiltUpPanel\\python\\tilt_up_panel_editor.py"),
 		_T("RyViz\\tilt_up_panel_editor.py"),
 		_T("tilt_up_panel_editor.py"),
 	};
 
-	for (const TCHAR* suffix : kCandidates)
+	for (const TCHAR* suffix : kRelCandidates)
 	{
 		MSTR candidate = dir + suffix;
-		if (_taccess(candidate, 0) == 0)
+		if (FileExists(candidate))
 		{
 			outPath = candidate;
 			return true;
 		}
 	}
 	return false;
+}
+
+static INode* FindEditingNode(TiltUpPanel* obj, IObjParam* ip)
+{
+	if (!obj || !ip)
+		return nullptr;
+
+	for (int i = 0; i < ip->GetSelNodeCount(); ++i)
+	{
+		INode* n = ip->GetSelNode(i);
+		if (!n)
+			continue;
+		Object* ref = n->GetObjectRef();
+		if (!ref)
+			continue;
+		Object* base = ref->FindBaseObject();
+		if (base == obj || ref == obj)
+			return n;
+	}
+	return nullptr;
 }
 
 class TiltUpPanelClassDesc : public ClassDesc2
@@ -746,41 +786,57 @@ void TiltUpPanel::WriteRevealSpinnersToPblock(TimeValue t)
 
 void TiltUpPanel::LaunchRevealLayoutEditor()
 {
-	if (!editIp)
-		return;
+	IObjParam* ip = editIp;
+	if (!ip)
+		ip = static_cast<IObjParam*>(GetCOREInterface());
 
-	INode* node = nullptr;
-	for (int i = 0; i < editIp->GetSelNodeCount(); ++i)
-	{
-		INode* n = editIp->GetSelNode(i);
-		if (n && n->GetObjectRef() == this)
-		{
-			node = n;
-			break;
-		}
-	}
+	INode* node = FindEditingNode(this, ip);
 	if (!node)
+	{
+		NotifyUser(_T("Select a RyViz Tilt-Up Panel node, then click Edit Reveal Layout."));
 		return;
+	}
+
+	MSTR scriptPath;
+	if (!ResolveEditorScriptPath(scriptPath))
+	{
+		NotifyUser(
+			_T("Could not find tilt_up_panel_editor.py.\n\n")
+			_T("Set Windows env var RYVIZ_TILTUP_EDITOR to the full path,\n")
+			_T("or copy TiltUpPanel\\python to Documents\\3ds Max 2027\\scripts\\RyViz\\"));
+		return;
+	}
 
 	const ULONG handle = node->GetHandle();
-	MSTR ms;
-	MSTR scriptPath;
-	if (ResolveEditorScriptPath(scriptPath))
+	MSTR setHandle;
+	setHandle.printf(_T("global RyViz_TiltUpPanel_EditNodeHandle = %lu"), handle);
+
+	FPValue fpv;
+	if (!ExecuteMAXScriptScript(setHandle, MAXScript::ScriptSource::NonEmbedded, FALSE, &fpv))
 	{
-		MSTR escaped = EscapeForMaxScriptPath(scriptPath);
-		ms.printf(_T("global RyViz_TiltUpPanel_EditNodeHandle = %lu\n")
-			_T("python.ExecuteFile @\"%s\""),
-			handle, escaped.data());
+		MSTR err(_T("Failed to set editor node handle."));
+		if (fpv.type == TYPE_TSTR && fpv.tstr)
+		{
+			err += _T("\n");
+			err += *fpv.tstr;
+		}
+		NotifyUser(err);
+		return;
 	}
-	else
+
+	// Prefer filein_script_ex — Max's supported entry for .py from C++.
+	MSTR pyErr;
+	if (!filein_script_ex(scriptPath, MAXScript::ScriptSource::NonEmbedded, &pyErr))
 	{
-		ms.printf(_T("global RyViz_TiltUpPanel_EditNodeHandle = %lu\n")
-			_T("local p = getEnvVariable \"RYVIZ_TILTUP_EDITOR\"\n")
-			_T("if p == undefined do p = (getDir #userScripts) + \"\\\\RyViz\\\\tilt_up_panel_editor.py\"\n")
-			_T("python.ExecuteFile p"),
-			handle);
+		MSTR err;
+		err.printf(_T("Failed to launch editor script:\n%s"), scriptPath.data());
+		if (pyErr.Length() > 0)
+		{
+			err += _T("\n\n");
+			err += pyErr;
+		}
+		NotifyUser(err);
 	}
-	ExecuteMAXScriptScript(ms, MAXScript::ScriptSource::NonEmbedded, TRUE);
 }
 
 // ---------------------------------------------------------------------
