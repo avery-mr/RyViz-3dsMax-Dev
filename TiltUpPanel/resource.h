@@ -15,6 +15,11 @@
 #define IDS_EDGE_SIDES                  12
 #define IDS_EDGE_TOPBOT                 13
 #define IDS_EDIT_LAYOUT                 14
+#define IDS_OPENING_X                   15
+#define IDS_OPENING_Z                   16
+#define IDS_OPENING_W                   17
+#define IDS_OPENING_H                   18
+#define IDS_PANEL_COLORS                19
 
 #define IDD_TILTUP_PANEL                101
 
@@ -33,12 +38,5 @@
 
 #define IDC_EDGE_SIDES                  1017
 #define IDC_EDGE_TOPBOT                 1018
-
-#define IDC_REVEAL_LIST                 1011
-#define IDC_ADD_HORIZ                   1012
-#define IDC_ADD_VERT                    1013
-#define IDC_REMOVE_REVEAL               1014
-#define IDC_REVEAL_POS_EDIT             1015
-#define IDC_REVEAL_POS_SPIN             1016
 
 #define IDC_EDIT_LAYOUT                 1019

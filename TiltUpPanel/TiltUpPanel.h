@@ -2,11 +2,12 @@
 	TiltUpPanel.h
 
 	Parametric tilt-up precast wall panel (GeomObject / SimpleObject2).
-	Phase 2: MNMesh cut-grid. Reveals are axis+position Tabs; groove
-	width/depth are global. Optional edgeSides / edgeTopBot inject
-	half-width reveals at the panel bounds. Base wall thickness is
-	`depth`. Field faces extrude on a shared outer grid (`grooveDepth`);
-	reveal cells keep the groove floor on the front.
+	MNMesh cut-grid. Reveals are axis+position Tabs; groove width/depth
+	are global. Optional edgeSides / edgeTopBot inject half-width reveals
+	at the panel bounds. Rectangular openings punch through the grid.
+	Base wall thickness is `depth`. Field faces extrude on a shared outer
+	grid (`grooveDepth`). Optional panelColors (Point3 tab) tint field
+	subpanels via vertex color.
 
 	Local space: X = width, Y = thickness, Z = height.
 	Origin is the lower-left-back corner. Base front is y = depth;
@@ -21,7 +22,8 @@
 #include "iparamm2.h"
 #include "iparamb2.h"
 #include "simpobj.h"
-#include "resource.h"
+// Force project-local resource.h (MaxSdkInc can otherwise shadow "resource.h").
+#include "./resource.h"
 
 #define TILTUPPANEL_CLASS_ID Class_ID(0x7b3e1a90, 0x2c8d4f61)
 
@@ -35,22 +37,23 @@ enum
 {
 	pb_width,
 	pb_height,
-	pb_depth,				// base wall thickness (minimum)
-	pb_revealAxis,			// TYPE_INT_TAB    0 = horizontal (Z), 1 = vertical (X)
-	pb_revealPos,			// TYPE_FLOAT_TAB
-	pb_grooveWidth,			// global, all reveals
-	pb_grooveDepth,			// global; fields extrude out by this amount
-	pb_edgeSides,			// half-width vertical reveals at X=0 and X=width
-	pb_edgeTopBot			// half-width horizontal reveals at Z=0 and Z=height
+	pb_depth,
+	pb_revealAxis,
+	pb_revealPos,
+	pb_grooveWidth,
+	pb_grooveDepth,
+	pb_edgeSides,
+	pb_edgeTopBot,
+	pb_openingX,
+	pb_openingZ,
+	pb_openingW,
+	pb_openingH,
+	pb_panelColors			// TYPE_POINT3_TAB, one RGB per subpanel region
 };
 
 class TiltUpPanel : public SimpleObject2
 {
 public:
-	int selectedIndex;
-	HWND hPanel;
-	ISpinnerControl* spinRevealPos;
-
 	TiltUpPanel();
 	~TiltUpPanel();
 
@@ -79,14 +82,6 @@ public:
 
 	RefTargetHandle Clone(RemapDir& remap) override;
 
-	void SyncRevealTabs();
-	void AddReveal(int axis);
-	void RemoveSelectedReveal();
-	void InitRevealControls(HWND hWnd);
-	void RefreshRevealList();
-	void LoadSelectedRevealToUI();
-	void WriteRevealSpinnersToPblock(TimeValue t);
-	int SyncSelectionFromList();
 	void LaunchRevealLayoutEditor();
 
 	static IObjParam* editIp;

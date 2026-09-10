@@ -46,8 +46,28 @@ plus-shaped floor is the original front grid on reveal cells.
 MAXScript: `.revealAxis`, `.revealPos`, `.grooveWidth`, `.grooveDepth`,
 `.edgeSides`, `.edgeTopBot`. Axis 0 = horizontal (Z), 1 = vertical (X).
 
-Phase 3 is still the floating Python 2D editor (modeless, pblock in/out,
-no geometry writes). This rollout is the interim authoring UI.
+The Modify rollout remains the interim reveal list UI; preferred authoring
+is the floating editor.
+
+## Phase 3 editor + openings
+
+Floating Python editor writes pblock only. Openings are rectangular hole
+loops in the same cut-grid pass as reveals:
+
+- Tabs: `openingX`, `openingZ`, `openingW`, `openingH` (lower-left XZ).
+- Classification: opening > reveal > field.
+- Opening cells omit front/back; solid-adjacent edges get through-wall
+  jambs; panel-edge openings omit outer walls (doors).
+- Editor: **Draw Opening…** marquee, drag/resize edges, L/R/T/B + % spinners.
+- Modify panel keeps size/groove/insets + **Edit Reveal Layout…** only;
+  reveal list UI removed (authoring is editor-only).
+
+## Panel colors (prototype)
+
+`panelColors` TYPE_POINT3_TAB — one RGB (0–1) per subpanel region between
+reveal dividers (same layout as C++ `BuildRegionDividers`). Applied as
+vertex color on outer/front field verts. Editor: Paint Fill, 8 swatches,
+Show colors toggle.
 
 ## Coordinates
 

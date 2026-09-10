@@ -41,7 +41,7 @@
 		<ClCompile>
 			<WholeProgramOptimization>false</WholeProgramOptimization>
 			<PreprocessorDefinitions>_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-			<AdditionalIncludeDirectories>$(MaxSdkInc);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+			<AdditionalIncludeDirectories>$(ProjectDir);$(MaxSdkInc);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
 			<WarningLevel>Level4</WarningLevel>
 		</ClCompile>
 		<Link>

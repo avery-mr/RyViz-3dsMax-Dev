@@ -1,13 +1,15 @@
 /*
 	TiltUpPanel.cpp
 
-	Phase 2: MNMesh cut-grid. Reveal strips are unions of front-face
-	cells. The base wall is a box of thickness `depth`. Reveal cells
-	keep front quads (groove floor). Field cells share one outer grid
-	at grooveDepth and boundary walls only — one welded element.
+	Phase 2+: MNMesh cut-grid. Reveal strips are unions of front-face
+	cells. Rectangular openings punch through the same grid (opening
+	wins over reveal). The base wall is a box of thickness `depth`.
+	Reveal cells keep front quads (groove floor). Field cells share one
+	outer grid at grooveDepth and boundary walls only — one welded element.
 */
 
 #include "TiltUpPanel.h"
+#include "./resource.h"
 #include "polyobj.h"
 #include "mnmesh.h"
 #include "custcont.h"
@@ -188,6 +190,18 @@ static ParamBlockDesc2 tiltUpPanel_paramblock(
 		p_ui, TYPE_SINGLECHEKBOX, IDC_EDGE_TOPBOT,
 		p_end,
 
+	pb_openingX, _T("openingX"), TYPE_FLOAT_TAB, 0, P_VARIABLE_SIZE, IDS_OPENING_X,
+		p_end,
+	pb_openingZ, _T("openingZ"), TYPE_FLOAT_TAB, 0, P_VARIABLE_SIZE, IDS_OPENING_Z,
+		p_end,
+	pb_openingW, _T("openingW"), TYPE_FLOAT_TAB, 0, P_VARIABLE_SIZE, IDS_OPENING_W,
+		p_end,
+	pb_openingH, _T("openingH"), TYPE_FLOAT_TAB, 0, P_VARIABLE_SIZE, IDS_OPENING_H,
+		p_end,
+
+	pb_panelColors, _T("panelColors"), TYPE_POINT3_TAB, 0, P_VARIABLE_SIZE, IDS_PANEL_COLORS,
+		p_end,
+
 	p_end
 );
 
@@ -252,6 +266,11 @@ struct PanelBuildInput
 	BOOL edgeTopBot;
 	Tab<int> axis;
 	Tab<float> pos;
+	Tab<float> openX;
+	Tab<float> openZ;
+	Tab<float> openW;
+	Tab<float> openH;
+	Tab<Point3> panelColors;
 };
 
 static int GridVert(int nx, int i, int k, int base)
@@ -266,6 +285,27 @@ static void AddMNQuad(MNMesh& mm, int a, int b, int c, int d, DWORD sm)
 	mm.F(nf)->MakePoly(4, vv);
 	mm.F(nf)->smGroup = sm;
 }
+
+static BOOL PointInOpening(float cx, float cz, const PanelBuildInput& in)
+{
+	const int n = in.openX.Count();
+	for (int o = 0; o < n; ++o)
+	{
+		float x0 = in.openX[o];
+		float z0 = in.openZ[o];
+		float x1 = x0 + in.openW[o];
+		float z1 = z0 + in.openH[o];
+		if (in.openW[o] <= kCutEps || in.openH[o] <= kCutEps)
+			continue;
+		if (cx >= x0 - kCutEps && cx <= x1 + kCutEps &&
+			cz >= z0 - kCutEps && cz <= z1 + kCutEps)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+static BOOL CellInReveal(float cx, float cz, const PanelBuildInput& in);
+static void ApplyMNMeshVertexColors(MNMesh& mm, const PanelBuildInput& in);
 
 static BOOL CellInReveal(float cx, float cz, const PanelBuildInput& in)
 {
@@ -286,11 +326,10 @@ static BOOL CellInReveal(float cx, float cz, const PanelBuildInput& in)
 	return FALSE;
 }
 
-static BOOL CellIsField(int i, int k, const Tab<float>& xs, const Tab<float>& zs, const PanelBuildInput& in)
+static void CellCenter(int i, int k, const Tab<float>& xs, const Tab<float>& zs, float& cx, float& cz)
 {
-	float cx = 0.5f * (xs[i] + xs[i + 1]);
-	float cz = 0.5f * (zs[k] + zs[k + 1]);
-	return !CellInReveal(cx, cz, in);
+	cx = 0.5f * (xs[i] + xs[i + 1]);
+	cz = 0.5f * (zs[k] + zs[k + 1]);
 }
 
 static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
@@ -321,6 +360,22 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 			}
 		}
 	}
+
+	const int nOpen = in.openX.Count();
+	for (int o = 0; o < nOpen; ++o)
+	{
+		if (in.openW[o] <= kCutEps || in.openH[o] <= kCutEps)
+			continue;
+		float x0 = in.openX[o];
+		float x1 = x0 + in.openW[o];
+		float z0 = in.openZ[o];
+		float z1 = z0 + in.openH[o];
+		xs.Append(1, &x0);
+		xs.Append(1, &x1);
+		zs.Append(1, &z0);
+		zs.Append(1, &z1);
+	}
+
 	FinalizeCuts(xs, 0.0f, in.width);
 	FinalizeCuts(zs, 0.0f, in.height);
 
@@ -354,23 +409,49 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 	const DWORD smTop = (1 << 5);
 	const DWORD smLeft = (1 << 6);
 	const DWORD smRight = (1 << 7);
+	const DWORD smJamb = (1 << 8);
 
 	BOOL doRelief = (nRev > 0 && in.grooveD > kCutEps && half > kCutEps);
 
+	Tab<BOOL> isOpening;
 	Tab<BOOL> isField;
+	isOpening.SetCount(ncx * ncz);
 	isField.SetCount(ncx * ncz);
 	for (int k = 0; k < ncz; ++k)
 	{
 		for (int i = 0; i < ncx; ++i)
-			isField[k * ncx + i] = doRelief ? CellIsField(i, k, xs, zs, in) : FALSE;
+		{
+			float cx, cz;
+			CellCenter(i, k, xs, zs, cx, cz);
+			BOOL open = PointInOpening(cx, cz, in);
+			isOpening[k * ncx + i] = open;
+			// Opening wins over reveal; fields only on non-opening non-reveal cells.
+			isField[k * ncx + i] = (!open && doRelief && !CellInReveal(cx, cz, in)) ? TRUE : FALSE;
+		}
 	}
+
+	auto IsOpen = [&](int i, int k) -> BOOL
+	{
+		if (i < 0 || k < 0 || i >= ncx || k >= ncz)
+			return FALSE;
+		return isOpening[k * ncx + i];
+	};
+	auto IsField = [&](int i, int k) -> BOOL
+	{
+		if (i < 0 || k < 0 || i >= ncx || k >= ncz)
+			return FALSE;
+		return isField[k * ncx + i];
+	};
 
 	for (int k = 0; k < ncz; ++k)
 	{
 		for (int i = 0; i < ncx; ++i)
 		{
+			if (IsOpen(i, k))
+				continue;
+
 			// Groove floor on reveal cells only when relieving; else full front.
-			if (!doRelief || !isField[k * ncx + i])
+			if (!doRelief || !IsField(i, k))
 			{
 				AddMNQuad(mm,
 					GridVert(nx, i, k, frontBase),
@@ -388,36 +469,85 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 		}
 	}
 
+	// Perimeter walls — skip where an opening meets the panel edge (doors).
 	for (int k = 0; k < ncz; ++k)
 	{
-		AddMNQuad(mm,
-			GridVert(nx, 0, k, backBase),
-			GridVert(nx, 0, k + 1, backBase),
-			GridVert(nx, 0, k + 1, frontBase),
-			GridVert(nx, 0, k, frontBase),
-			smLeft);
-		AddMNQuad(mm,
-			GridVert(nx, nx - 1, k, backBase),
-			GridVert(nx, nx - 1, k, frontBase),
-			GridVert(nx, nx - 1, k + 1, frontBase),
-			GridVert(nx, nx - 1, k + 1, backBase),
-			smRight);
+		if (!IsOpen(0, k))
+		{
+			AddMNQuad(mm,
+				GridVert(nx, 0, k, backBase),
+				GridVert(nx, 0, k + 1, backBase),
+				GridVert(nx, 0, k + 1, frontBase),
+				GridVert(nx, 0, k, frontBase),
+				smLeft);
+		}
+		if (!IsOpen(ncx - 1, k))
+		{
+			AddMNQuad(mm,
+				GridVert(nx, nx - 1, k, backBase),
+				GridVert(nx, nx - 1, k, frontBase),
+				GridVert(nx, nx - 1, k + 1, frontBase),
+				GridVert(nx, nx - 1, k + 1, backBase),
+				smRight);
+		}
 	}
 
 	for (int i = 0; i < ncx; ++i)
 	{
-		AddMNQuad(mm,
-			GridVert(nx, i, 0, backBase),
-			GridVert(nx, i, 0, frontBase),
-			GridVert(nx, i + 1, 0, frontBase),
-			GridVert(nx, i + 1, 0, backBase),
-			smBottom);
-		AddMNQuad(mm,
-			GridVert(nx, i, nz - 1, backBase),
-			GridVert(nx, i + 1, nz - 1, backBase),
-			GridVert(nx, i + 1, nz - 1, frontBase),
-			GridVert(nx, i, nz - 1, frontBase),
-			smTop);
+		if (!IsOpen(i, 0))
+		{
+			AddMNQuad(mm,
+				GridVert(nx, i, 0, backBase),
+				GridVert(nx, i, 0, frontBase),
+				GridVert(nx, i + 1, 0, frontBase),
+				GridVert(nx, i + 1, 0, backBase),
+				smBottom);
+		}
+		if (!IsOpen(i, ncz - 1))
+		{
+			AddMNQuad(mm,
+				GridVert(nx, i, nz - 1, backBase),
+				GridVert(nx, i + 1, nz - 1, backBase),
+				GridVert(nx, i + 1, nz - 1, frontBase),
+				GridVert(nx, i, nz - 1, frontBase),
+				smTop);
+		}
+	}
+
+	// Through-wall jambs on opening / solid shared edges.
+	// No jamb on panel-perimeter sides (doors/windows open to the outside).
+	auto SolidNeighbor = [&](int ni, int nk) -> BOOL
+	{
+		if (ni < 0 || nk < 0 || ni >= ncx || nk >= ncz)
+			return FALSE;
+		return !isOpening[nk * ncx + ni];
+	};
+
+	for (int k = 0; k < ncz; ++k)
+	{
+		for (int i = 0; i < ncx; ++i)
+		{
+			if (!IsOpen(i, k))
+				continue;
+
+			int f00 = GridVert(nx, i, k, frontBase);
+			int f01 = GridVert(nx, i, k + 1, frontBase);
+			int f11 = GridVert(nx, i + 1, k + 1, frontBase);
+			int f10 = GridVert(nx, i + 1, k, frontBase);
+			int b00 = GridVert(nx, i, k, backBase);
+			int b01 = GridVert(nx, i, k + 1, backBase);
+			int b11 = GridVert(nx, i + 1, k + 1, backBase);
+			int b10 = GridVert(nx, i + 1, k, backBase);
+
+			if (SolidNeighbor(i, k - 1))
+				AddMNQuad(mm, b00, b10, f10, f00, smJamb);
+			if (SolidNeighbor(i, k + 1))
+				AddMNQuad(mm, b01, f01, f11, b11, smJamb);
+			if (SolidNeighbor(i - 1, k))
+				AddMNQuad(mm, b00, f00, f01, b01, smJamb);
+			if (SolidNeighbor(i + 1, k))
+				AddMNQuad(mm, b10, b11, f11, f10, smJamb);
+		}
 	}
 
 	if (doRelief)
@@ -436,18 +566,11 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 			return outerId[idx];
 		};
 
-		auto NeighborIsField = [&](int ni, int nk) -> BOOL
-		{
-			if (ni < 0 || nk < 0 || ni >= ncx || nk >= ncz)
-				return FALSE;
-			return isField[nk * ncx + ni];
-		};
-
 		for (int k = 0; k < ncz; ++k)
 		{
 			for (int i = 0; i < ncx; ++i)
 			{
-				if (!isField[k * ncx + i])
+				if (!IsField(i, k))
 					continue;
 
 				int f00 = GridVert(nx, i, k, frontBase);
@@ -462,14 +585,13 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 
 				AddMNQuad(mm, e00, e01, e11, e10, smPanel);
 
-				// Walls only on field/reveal or field/perimeter edges.
-				if (!NeighborIsField(i, k - 1))
+				if (!IsField(i, k - 1))
 					AddMNQuad(mm, f00, e00, e10, f10, smWall);
-				if (!NeighborIsField(i, k + 1))
+				if (!IsField(i, k + 1))
 					AddMNQuad(mm, f01, f11, e11, e01, smWall);
-				if (!NeighborIsField(i - 1, k))
+				if (!IsField(i - 1, k))
 					AddMNQuad(mm, f00, f01, e01, e00, smWall);
-				if (!NeighborIsField(i + 1, k))
+				if (!IsField(i + 1, k))
 					AddMNQuad(mm, f10, e10, e11, f11, smWall);
 			}
 		}
@@ -478,6 +600,116 @@ static void BuildPanelMNMesh(MNMesh& mm, const PanelBuildInput& in)
 	mm.InvalidateGeomCache();
 	mm.InvalidateTopoCache();
 	mm.FillInMesh();
+	ApplyMNMeshVertexColors(mm, in);
+}
+
+static void BuildRegionDividers(const PanelBuildInput& in, Tab<float>& vx, Tab<float>& hz)
+{
+	vx.ZeroCount();
+	hz.ZeroCount();
+	float zero = 0.0f;
+	vx.Append(1, &zero);
+	hz.Append(1, &zero);
+	const int n = in.axis.Count();
+	for (int r = 0; r < n; ++r)
+	{
+		float p = in.pos[r];
+		if (in.axis[r] == 0)
+			hz.Append(1, &p);
+		else
+			vx.Append(1, &p);
+	}
+	float w = in.width;
+	float h = in.height;
+	vx.Append(1, &w);
+	hz.Append(1, &h);
+	FinalizeCuts(vx, 0.0f, in.width);
+	FinalizeCuts(hz, 0.0f, in.height);
+}
+
+static int RegionSpanIndex(const Tab<float>& cuts, float v)
+{
+	const int n = cuts.Count() - 1;
+	if (n <= 0)
+		return 0;
+	for (int i = 0; i < n; ++i)
+	{
+		if (v < cuts[i + 1] - kCutEps || i == n - 1)
+			return i;
+	}
+	return n - 1;
+}
+
+static int RegionIdAt(float cx, float cz, const Tab<float>& vx, const Tab<float>& hz)
+{
+	int ix = RegionSpanIndex(vx, cx);
+	int iz = RegionSpanIndex(hz, cz);
+	int nx = vx.Count() - 1;
+	if (nx < 1)
+		nx = 1;
+	return iz * nx + ix;
+}
+
+static Point3 ColorForRegion(const PanelBuildInput& in, int rid)
+{
+	Point3 gray(0.55f, 0.55f, 0.55f);
+	if (rid < 0 || rid >= in.panelColors.Count())
+		return gray;
+	return in.panelColors[rid];
+}
+
+static void ApplyMNMeshVertexColors(MNMesh& mm, const PanelBuildInput& in)
+{
+	if (mm.numv <= 0 || mm.numf <= 0)
+		return;
+
+	Tab<float> vx, hz;
+	BuildRegionDividers(in, vx, hz);
+
+	mm.SetMapNum(1);
+	mm.InitMap(0);
+	MNMap* map = mm.M(0);
+	if (!map)
+		return;
+
+	map->setNumVerts(mm.numv);
+	Point3 gray(0.55f, 0.55f, 0.55f);
+	for (int i = 0; i < mm.numv; ++i)
+		map->v[i] = gray;
+
+	const float yPaint = (in.grooveD > kCutEps) ? (in.depth + in.grooveD) : in.depth;
+	for (int i = 0; i < mm.numv; ++i)
+	{
+		Point3 p = mm.v[i].p;
+		if (fabsf(p.y - yPaint) > 0.01f * (1.0f + fabsf(yPaint)))
+			continue;
+		if (PointInOpening(p.x, p.z, in))
+			continue;
+		int rid = RegionIdAt(p.x, p.z, vx, hz);
+		map->v[i] = ColorForRegion(in, rid);
+	}
+
+	for (int f = 0; f < mm.numf && f < map->numf; ++f)
+	{
+		MNFace* face = mm.F(f);
+		MNMapFace* mf = map->F(f);
+		if (!face || !mf)
+			continue;
+		if (mf->deg != face->deg)
+			mf->SetSize(face->deg);
+		for (int j = 0; j < face->deg; ++j)
+			mf->tv[j] = face->vtx[j];
+	}
+}
+
+static void EnableMeshVertexColorDisplay(Mesh& mesh)
+{
+	if (mesh.getNumVerts() <= 0)
+		return;
+	// Max 2027: map channel 0 holds vertex colors; setCVertMode/setVCDisplay are gone.
+	if (!mesh.mapSupport(0))
+		mesh.setMapSupport(0, TRUE);
+	mesh.setVCDisplayData(0);
 }
 
 static void AppendEdgeReveals(PanelBuildInput& in)
@@ -519,6 +751,11 @@ static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, Panel
 	in.edgeTopBot = FALSE;
 	in.axis.ZeroCount();
 	in.pos.ZeroCount();
+	in.openX.ZeroCount();
+	in.openZ.ZeroCount();
+	in.openW.ZeroCount();
+	in.openH.ZeroCount();
+	in.panelColors.ZeroCount();
 	if (!pb)
 		return;
 
@@ -553,10 +790,44 @@ static void ReadBuildInput(IParamBlock2* pb, TimeValue t, Interval& valid, Panel
 	}
 
 	AppendEdgeReveals(in);
+
+	int no = pb->Count(pb_openingX);
+	int nz = pb->Count(pb_openingZ);
+	int nw = pb->Count(pb_openingW);
+	int nh = pb->Count(pb_openingH);
+	if (nz < no) no = nz;
+	if (nw < no) no = nw;
+	if (nh < no) no = nh;
+
+	in.openX.SetCount(no);
+	in.openZ.SetCount(no);
+	in.openW.SetCount(no);
+	in.openH.SetCount(no);
+	for (int i = 0; i < no; ++i)
+	{
+		float ox = 0.0f, oz = 0.0f, ow = 0.0f, oh = 0.0f;
+		pb->GetValue(pb_openingX, t, ox, valid, i);
+		pb->GetValue(pb_openingZ, t, oz, valid, i);
+		pb->GetValue(pb_openingW, t, ow, valid, i);
+		pb->GetValue(pb_openingH, t, oh, valid, i);
+		in.openX[i] = ox;
+		in.openZ[i] = oz;
+		in.openW[i] = ow;
+		in.openH[i] = oh;
+	}
+
+	int nc = pb->Count(pb_panelColors);
+	in.panelColors.SetCount(nc);
+	for (int i = 0; i < nc; ++i)
+	{
+		Point3 col(0.55f, 0.55f, 0.55f);
+		pb->GetValue(pb_panelColors, t, col, valid, i);
+		in.panelColors[i] = col;
+	}
 }
 
 // ---------------------------------------------------------------------
-// Reveal UI
+// Modify panel
 // ---------------------------------------------------------------------
 
 class TiltUpPanelDlgProc : public ParamMap2UserDlgProc
@@ -565,223 +836,20 @@ public:
 	TiltUpPanel* ob;
 	TiltUpPanelDlgProc(TiltUpPanel* o) : ob(o) {}
 	void DeleteThis() override { delete this; }
-	void SetThing(ReferenceTarget* m) override
-	{
-		TiltUpPanel* next = (TiltUpPanel*)m;
-		if (ob && next && ob != next)
-		{
-			next->hPanel = ob->hPanel;
-			next->spinRevealPos = ob->spinRevealPos;
-			ob->hPanel = nullptr;
-			ob->spinRevealPos = nullptr;
-		}
-		ob = next;
-		if (ob)
-		{
-			ob->RefreshRevealList();
-			ob->LoadSelectedRevealToUI();
-		}
-	}
-	INT_PTR DlgProc(TimeValue t, IParamMap2* /*map*/, HWND hWnd, UINT msg, WPARAM wParam, LPARAM /*lParam*/) override;
+	void SetThing(ReferenceTarget* m) override { ob = (TiltUpPanel*)m; }
+	INT_PTR DlgProc(TimeValue /*t*/, IParamMap2* /*map*/, HWND /*hWnd*/, UINT msg, WPARAM wParam, LPARAM /*lParam*/) override;
 };
 
-INT_PTR TiltUpPanelDlgProc::DlgProc(TimeValue t, IParamMap2* /*map*/, HWND hWnd, UINT msg, WPARAM wParam, LPARAM /*lParam*/)
+INT_PTR TiltUpPanelDlgProc::DlgProc(TimeValue /*t*/, IParamMap2* /*map*/, HWND /*hWnd*/, UINT msg, WPARAM wParam, LPARAM /*lParam*/)
 {
 	if (!ob)
 		return FALSE;
-
-	switch (msg)
+	if (msg == WM_COMMAND && LOWORD(wParam) == IDC_EDIT_LAYOUT && HIWORD(wParam) == BN_CLICKED)
 	{
-	case WM_INITDIALOG:
-		ob->InitRevealControls(hWnd);
-		return FALSE;
-	case WM_COMMAND:
-		switch (LOWORD(wParam))
-		{
-		case IDC_ADD_HORIZ:
-			if (HIWORD(wParam) == BN_CLICKED)
-				ob->AddReveal(0);
-			return TRUE;
-		case IDC_ADD_VERT:
-			if (HIWORD(wParam) == BN_CLICKED)
-				ob->AddReveal(1);
-			return TRUE;
-		case IDC_REMOVE_REVEAL:
-			if (HIWORD(wParam) == BN_CLICKED)
-				ob->RemoveSelectedReveal();
-			return TRUE;
-		case IDC_EDIT_LAYOUT:
-			if (HIWORD(wParam) == BN_CLICKED)
-				ob->LaunchRevealLayoutEditor();
-			return TRUE;
-		case IDC_REVEAL_LIST:
-			if (HIWORD(wParam) == LBN_SELCHANGE)
-			{
-				ob->SyncSelectionFromList();
-				ob->LoadSelectedRevealToUI();
-			}
-			return TRUE;
-		}
-		break;
-	case CC_SPINNER_CHANGE:
-	case CC_SPINNER_BUTTONUP:
-	{
-		int id = LOWORD(wParam);
-		if (id == IDC_REVEAL_POS_SPIN)
-		{
-			ob->WriteRevealSpinnersToPblock(t);
-			return TRUE;
-		}
-		break;
-	}
-	case WM_CUSTEDIT_ENTER:
-	{
-		int id = LOWORD(wParam);
-		if (id == IDC_REVEAL_POS_EDIT)
-		{
-			ob->WriteRevealSpinnersToPblock(t);
-			return TRUE;
-		}
-		break;
-	}
+		ob->LaunchRevealLayoutEditor();
+		return TRUE;
 	}
 	return FALSE;
-}
-
-void TiltUpPanel::SyncRevealTabs()
-{
-	if (!pblock2)
-		return;
-	int n = pblock2->Count(pb_revealAxis);
-	int nPos = pblock2->Count(pb_revealPos);
-	if (nPos > n) n = nPos;
-	pblock2->SetCount(pb_revealAxis, n);
-	pblock2->SetCount(pb_revealPos, n);
-	if (selectedIndex >= n)
-		selectedIndex = n - 1;
-}
-
-void TiltUpPanel::AddReveal(int axis)
-{
-	if (!pblock2)
-		return;
-	SyncRevealTabs();
-	Interval valid = FOREVER;
-	float width = 0.0f;
-	float height = 0.0f;
-	pblock2->GetValue(pb_width, 0, width, valid);
-	pblock2->GetValue(pb_height, 0, height, valid);
-
-	int n = pblock2->Count(pb_revealAxis);
-	float pos = (axis == 0) ? height * 0.5f : width * 0.5f;
-
-	theHold.Begin();
-	pblock2->SetCount(pb_revealAxis, n + 1);
-	pblock2->SetCount(pb_revealPos, n + 1);
-	pblock2->SetValue(pb_revealAxis, 0, axis, n);
-	pblock2->SetValue(pb_revealPos, 0, pos, n);
-	theHold.Accept(_M("Add Reveal"));
-
-	selectedIndex = n;
-	RefreshRevealList();
-	LoadSelectedRevealToUI();
-}
-
-void TiltUpPanel::RemoveSelectedReveal()
-{
-	if (!pblock2)
-		return;
-	SyncRevealTabs();
-	int n = pblock2->Count(pb_revealAxis);
-	if (n <= 0 || selectedIndex < 0 || selectedIndex >= n)
-		return;
-
-	theHold.Begin();
-	pblock2->Delete(pb_revealAxis, selectedIndex, 1);
-	pblock2->Delete(pb_revealPos, selectedIndex, 1);
-	theHold.Accept(_M("Remove Reveal"));
-
-	n = pblock2->Count(pb_revealAxis);
-	if (selectedIndex >= n)
-		selectedIndex = n - 1;
-	RefreshRevealList();
-	LoadSelectedRevealToUI();
-}
-
-void TiltUpPanel::InitRevealControls(HWND hWnd)
-{
-	hPanel = hWnd;
-	if (!spinRevealPos)
-	{
-		spinRevealPos = SetupUniverseSpinner(hWnd, IDC_REVEAL_POS_SPIN, IDC_REVEAL_POS_EDIT, 0.0f, 1.0e30f, 0.0f);
-		spinRevealPos->SetAutoScale(TRUE);
-	}
-	SyncRevealTabs();
-	if (selectedIndex < 0 && pblock2 && pblock2->Count(pb_revealAxis) > 0)
-		selectedIndex = 0;
-	RefreshRevealList();
-	LoadSelectedRevealToUI();
-}
-
-void TiltUpPanel::RefreshRevealList()
-{
-	if (!hPanel || !pblock2)
-		return;
-	HWND hList = GetDlgItem(hPanel, IDC_REVEAL_LIST);
-	if (!hList)
-		return;
-
-	SendMessage(hList, LB_RESETCONTENT, 0, 0);
-	int n = pblock2->Count(pb_revealAxis);
-	Interval valid = FOREVER;
-	for (int i = 0; i < n; ++i)
-	{
-		int axis = 0;
-		float pos = 0.0f;
-		pblock2->GetValue(pb_revealAxis, 0, axis, valid, i);
-		if (i < pblock2->Count(pb_revealPos))
-			pblock2->GetValue(pb_revealPos, 0, pos, valid, i);
-		TCHAR buf[64];
-		_stprintf_s(buf, _T("%s  %.4g"), axis ? _T("V") : _T("H"), pos);
-		SendMessage(hList, LB_ADDSTRING, 0, (LPARAM)buf);
-	}
-	if (selectedIndex >= 0 && selectedIndex < n)
-		SendMessage(hList, LB_SETCURSEL, selectedIndex, 0);
-}
-
-int TiltUpPanel::SyncSelectionFromList()
-{
-	if (!hPanel)
-		return selectedIndex;
-	HWND hList = GetDlgItem(hPanel, IDC_REVEAL_LIST);
-	if (!hList)
-		return selectedIndex;
-	int sel = (int)SendMessage(hList, LB_GETCURSEL, 0, 0);
-	selectedIndex = (sel == LB_ERR) ? -1 : sel;
-	return selectedIndex;
-}
-
-void TiltUpPanel::LoadSelectedRevealToUI()
-{
-	BOOL on = (pblock2 && selectedIndex >= 0 && selectedIndex < pblock2->Count(pb_revealAxis));
-	if (spinRevealPos) spinRevealPos->Enable(on);
-	if (!on)
-		return;
-
-	Interval valid = FOREVER;
-	float pos = 0.0f;
-	pblock2->GetValue(pb_revealPos, 0, pos, valid, selectedIndex);
-	if (spinRevealPos) spinRevealPos->SetValue(pos, FALSE);
-}
-
-void TiltUpPanel::WriteRevealSpinnersToPblock(TimeValue t)
-{
-	if (!pblock2 || selectedIndex < 0)
-		return;
-	if (selectedIndex >= pblock2->Count(pb_revealAxis))
-		return;
-	if (spinRevealPos)
-		pblock2->SetValue(pb_revealPos, t, spinRevealPos->GetFVal(), selectedIndex);
 }
 
 void TiltUpPanel::LaunchRevealLayoutEditor()
@@ -844,7 +912,6 @@ void TiltUpPanel::LaunchRevealLayoutEditor()
 // ---------------------------------------------------------------------
 
 TiltUpPanel::TiltUpPanel()
-	: selectedIndex(-1), hPanel(nullptr), spinRevealPos(nullptr)
 {
 	GetTiltUpPanelDesc()->MakeAutoParamBlocks(this);
 }
@@ -859,20 +926,11 @@ void TiltUpPanel::BeginEditParams(IObjParam* ip, ULONG flags, Animatable* prev)
 	SimpleObject2::BeginEditParams(ip, flags, prev);
 	GetTiltUpPanelDesc()->BeginEditParams(ip, this, flags, prev);
 	tiltUpPanel_paramblock.SetUserDlgProc(new TiltUpPanelDlgProc(this));
-	if (pblock2)
-	{
-		IParamMap2* map = pblock2->GetMap();
-		if (map && map->GetHWnd())
-			InitRevealControls(map->GetHWnd());
-	}
 }
 
 void TiltUpPanel::EndEditParams(IObjParam* ip, ULONG flags, Animatable* next)
 {
-	if (spinRevealPos) { ReleaseISpinner(spinRevealPos); spinRevealPos = nullptr; }
-	hPanel = nullptr;
 	editIp = nullptr;
-
 	SimpleObject2::EndEditParams(ip, flags, next);
 	GetTiltUpPanelDesc()->EndEditParams(ip, this, flags, next);
 }
@@ -885,6 +943,7 @@ void TiltUpPanel::BuildMesh(TimeValue t)
 	MNMesh mm;
 	BuildPanelMNMesh(mm, in);
 	mm.OutToTri(mesh);
+	EnableMeshVertexColorDisplay(mesh);
 }
 
 void TiltUpPanel::InvalidateUI()

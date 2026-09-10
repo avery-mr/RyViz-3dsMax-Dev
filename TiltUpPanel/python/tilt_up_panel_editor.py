@@ -1,12 +1,7 @@
 """
-Modeless PySide reveal-layout editor for RyViz_TiltUpPanel.
+Modeless PySide reveal/opening layout editor for RyViz_TiltUpPanel.
 
-Launched from the Modify rollout button or via MAXScript:
-  global RyViz_TiltUpPanel_EditNodeHandle = <node handle>
-  python.ExecuteFile @"path/to/tilt_up_panel_editor.py"
-
-Canvas matches a Front view looking toward -Y: +Z up, +X to the left
-(so left/right match the front face as seen from the reveal side).
+Canvas matches a Front view looking toward -Y: +Z up, +X to the left.
 """
 
 from __future__ import annotations
@@ -28,19 +23,31 @@ import pymxs
 from tiltup_panel_pblock import (
     AXIS_HORIZONTAL,
     AXIS_VERTICAL,
+    add_opening,
     add_reveal,
+    ensure_panel_colors,
     is_tiltup_panel,
+    list_regions,
     read_panel,
+    remove_opening,
     remove_reveal,
     write_dimensions,
     write_edge_insets,
     write_groove,
+    write_opening,
+    write_panel_color,
     write_reveal_pos,
 )
 
 rt = pymxs.runtime
 
 _EDITOR_INSTANCE = None
+
+# Selection kinds
+SEL_NONE = 0
+SEL_REVEAL = 1
+SEL_OPENING = 2
+SEL_REGION = 3
 
 
 def _max_main_window():
@@ -53,12 +60,10 @@ def _max_main_window():
 
 
 def _scene_y(panel_height: float, z: float) -> float:
-    """Panel Z -> scene Y (Z up)."""
     return panel_height - z
 
 
 def _scene_x(panel_width: float, x: float) -> float:
-    """Panel X -> scene X. Flipped so front (+Y) left/right match the viewport."""
     return panel_width - x
 
 
@@ -73,11 +78,9 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 class WorldUnitSpinBox(QtWidgets.QDoubleSpinBox):
-    """Stores system-unit floats; displays/parses current Max display units."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setRange(0.0, 1.0e30)
+        self.setRange(-1.0e30, 1.0e30)
         self.setDecimals(6)
         self.setSingleStep(1.0)
         self.setKeyboardTracking(False)
@@ -95,7 +98,6 @@ class WorldUnitSpinBox(QtWidgets.QDoubleSpinBox):
             return float(self.value())
 
     def validate(self, text, pos):
-        # Allow unit strings like 10'3", 3.5m while typing.
         cleaned = str(text).strip()
         if not cleaned:
             return (QtGui.QValidator.Intermediate, text, pos)
@@ -118,6 +120,7 @@ class RevealBandItem(QtWidgets.QGraphicsRectItem):
             self.setPos(_scene_x(panel_w, pos), 0.0)
             self.setCursor(QtCore.Qt.SizeHorCursor)
 
+        self.kind = SEL_REVEAL
         self.reveal_index = index
         self.axis = axis
         self.panel_w = panel_w
@@ -129,7 +132,6 @@ class RevealBandItem(QtWidgets.QGraphicsRectItem):
             | QtWidgets.QGraphicsItem.ItemIsMovable
             | QtWidgets.QGraphicsItem.ItemSendsGeometryChanges
         )
-        self.setAcceptHoverEvents(True)
         self.setZValue(10.0)
         self._apply_style(False)
 
@@ -171,13 +173,205 @@ class RevealBandItem(QtWidgets.QGraphicsRectItem):
         if was_dragging:
             view = self.scene().views()[0] if self.scene() and self.scene().views() else None
             if isinstance(view, PanelCanvas):
-                view.bandMoved.emit(self.reveal_index, self.panel_pos())
+                view.revealMoved.emit(self.reveal_index, self.panel_pos())
+
+
+class OpeningItem(QtWidgets.QGraphicsRectItem):
+    """Opening rect in scene space (X-flipped). Supports move + edge resize."""
+
+    def __init__(self, index: int, x: float, z: float, w: float, h: float, panel_w: float, panel_h: float):
+        super().__init__()
+        self.kind = SEL_OPENING
+        self.opening_index = index
+        self.panel_w = panel_w
+        self.panel_h = panel_h
+        self._mode = None
+        self._press_panel = None
+        self._orig = None  # left, right, bottom, top
+
+        self.setFlags(QtWidgets.QGraphicsItem.ItemIsSelectable)
+        self.setAcceptHoverEvents(True)
+        self.setZValue(8.0)
+        self._set_from_panel(x, z, w, h)
+        self._apply_style(False)
+
+    def _set_from_panel(self, x: float, z: float, w: float, h: float) -> None:
+        sx0 = _scene_x(self.panel_w, x + w)
+        sx1 = _scene_x(self.panel_w, x)
+        sy0 = _scene_y(self.panel_h, z + h)
+        sy1 = _scene_y(self.panel_h, z)
+        left = min(sx0, sx1)
+        top = min(sy0, sy1)
+        self.setPos(left, top)
+        self.setRect(0.0, 0.0, abs(sx1 - sx0), abs(sy1 - sy0))
+
+    def _apply_style(self, selected: bool) -> None:
+        if selected:
+            self.setPen(QtGui.QPen(QtGui.QColor(120, 220, 255), 0.0))
+            self.setBrush(QtGui.QBrush(QtGui.QColor(80, 160, 220, 50)))
+        else:
+            self.setPen(QtGui.QPen(QtGui.QColor(90, 180, 230, 220), 0.0, QtCore.Qt.DashLine))
+            self.setBrush(QtGui.QBrush(QtGui.QColor(60, 140, 200, 35)))
+
+    def itemChange(self, change, value):
+        if change == QtWidgets.QGraphicsItem.ItemSelectedHasChanged:
+            self._apply_style(bool(value))
+        return super().itemChange(change, value)
+
+    def panel_rect(self) -> tuple[float, float, float, float]:
+        r = self.rect()
+        p = self.pos()
+        scene_left = p.x()
+        scene_top = p.y()
+        scene_right = scene_left + r.width()
+        scene_bottom = scene_top + r.height()
+        # Scene left = panel right; scene right = panel left (X flip).
+        left = _panel_x(self.panel_w, scene_right)
+        right = _panel_x(self.panel_w, scene_left)
+        bottom = self.panel_h - scene_bottom
+        top = self.panel_h - scene_top
+        x = min(left, right)
+        z = min(bottom, top)
+        return (x, z, abs(right - left), abs(top - bottom))
+
+    def _hit_thresh(self) -> float:
+        view = self.scene().views()[0] if self.scene() and self.scene().views() else None
+        if view is not None:
+            # ~8px in scene units.
+            return abs(view.mapToScene(8, 0).x() - view.mapToScene(0, 0).x())
+        return max(self.panel_w, self.panel_h) * 0.02
+
+    def _hit_mode(self, local_pt: QtCore.QPointF) -> str:
+        r = self.rect()
+        t = self._hit_thresh()
+        on_left = abs(local_pt.x() - 0.0) <= t
+        on_right = abs(local_pt.x() - r.width()) <= t
+        on_top = abs(local_pt.y() - 0.0) <= t
+        on_bot = abs(local_pt.y() - r.height()) <= t
+        # Scene edges map to flipped panel edges.
+        if on_left and not on_top and not on_bot:
+            return "right"  # panel right
+        if on_right and not on_top and not on_bot:
+            return "left"  # panel left
+        if on_top and not on_left and not on_right:
+            return "top"
+        if on_bot and not on_left and not on_right:
+            return "bottom"
+        return "move"
+
+    def hoverMoveEvent(self, event) -> None:
+        mode = self._hit_mode(event.pos())
+        cursors = {
+            "left": QtCore.Qt.SizeHorCursor,
+            "right": QtCore.Qt.SizeHorCursor,
+            "top": QtCore.Qt.SizeVerCursor,
+            "bottom": QtCore.Qt.SizeVerCursor,
+            "move": QtCore.Qt.SizeAllCursor,
+        }
+        self.setCursor(cursors.get(mode, QtCore.Qt.ArrowCursor))
+        super().hoverMoveEvent(event)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != QtCore.Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self.setSelected(True)
+        self._mode = self._hit_mode(event.pos())
+        scene_pt = self.mapToScene(event.pos())
+        px = _panel_x(self.panel_w, scene_pt.x())
+        pz = self.panel_h - scene_pt.y()
+        self._press_panel = (px, pz)
+        x, z, w, h = self.panel_rect()
+        self._orig = (x, x + w, z, z + h)  # left, right, bottom, top
+        event.accept()
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._mode is None or self._orig is None or self._press_panel is None:
+            super().mouseMoveEvent(event)
+            return
+        scene_pt = self.mapToScene(event.pos())
+        px = _panel_x(self.panel_w, scene_pt.x())
+        pz = self.panel_h - scene_pt.y()
+        dx = px - self._press_panel[0]
+        dz = pz - self._press_panel[1]
+        left, right, bottom, top = self._orig
+        min_size = max(self.panel_w, self.panel_h) * 1.0e-4
+
+        if self._mode == "move":
+            left += dx
+            right += dx
+            bottom += dz
+            top += dz
+        elif self._mode == "left":
+            left = min(self._orig[0] + dx, right - min_size)
+        elif self._mode == "right":
+            right = max(self._orig[1] + dx, left + min_size)
+        elif self._mode == "bottom":
+            bottom = min(self._orig[2] + dz, top - min_size)
+        elif self._mode == "top":
+            top = max(self._orig[3] + dz, bottom + min_size)
+
+        self._set_from_panel(left, bottom, right - left, top - bottom)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._mode is not None:
+            view = self.scene().views()[0] if self.scene() and self.scene().views() else None
+            if isinstance(view, PanelCanvas):
+                x, z, w, h = self.panel_rect()
+                view.openingMoved.emit(self.opening_index, x, z, w, h)
+            self._mode = None
+            self._press_panel = None
+            self._orig = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class RegionItem(QtWidgets.QGraphicsRectItem):
+    """Paintable subpanel between reveal dividers (scene X-flipped)."""
+
+    def __init__(self, region_id: int, x: float, z: float, w: float, h: float, panel_w: float, panel_h: float, rgb, show_color: bool):
+        sx0 = _scene_x(panel_w, x + w)
+        sx1 = _scene_x(panel_w, x)
+        sy0 = _scene_y(panel_h, z + h)
+        sy1 = _scene_y(panel_h, z)
+        left = min(sx0, sx1)
+        top = min(sy0, sy1)
+        super().__init__(0.0, 0.0, abs(sx1 - sx0), abs(sy1 - sy0))
+        self.setPos(left, top)
+        self.kind = SEL_REGION
+        self.region_id = region_id
+        self.setZValue(2.0)
+        self.setFlag(QtWidgets.QGraphicsItem.ItemIsSelectable, False)
+        self.setAcceptedMouseButtons(QtCore.Qt.LeftButton)
+        self._apply_color(rgb, show_color)
+
+    def _apply_color(self, rgb, show_color: bool) -> None:
+        if show_color and rgb is not None:
+            r, g, b = [int(max(0.0, min(1.0, c)) * 255) for c in rgb]
+            self.setPen(QtGui.QPen(QtGui.QColor(r, g, b, 200), 0.0))
+            self.setBrush(QtGui.QBrush(QtGui.QColor(r, g, b, 120)))
+        else:
+            self.setPen(QtCore.Qt.NoPen)
+            self.setBrush(QtCore.Qt.NoBrush)
+
+    def mousePressEvent(self, event) -> None:
+        view = self.scene().views()[0] if self.scene() and self.scene().views() else None
+        if isinstance(view, PanelCanvas) and view._paint_mode:
+            view.regionPainted.emit(self.region_id)
+            event.accept()
+            return
+        event.ignore()
 
 
 class PanelCanvas(QtWidgets.QGraphicsView):
-    selectionChanged = QtCore.Signal(int)  # -1 if none
-    bandMoved = QtCore.Signal(int, float)
-    placeRequested = QtCore.Signal(float, float)  # panel x, panel z
+    selectionChanged = QtCore.Signal(int, int)  # kind, index
+    revealMoved = QtCore.Signal(int, float)
+    openingMoved = QtCore.Signal(int, float, float, float, float)
+    openingDrawn = QtCore.Signal(float, float, float, float)  # x,z,w,h panel
+    placeRequested = QtCore.Signal(float, float)  # panel x, z
+    regionPainted = QtCore.Signal(int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -193,24 +387,60 @@ class PanelCanvas(QtWidgets.QGraphicsView):
         self._panel_h = 1.0
         self._fitted = False
         self._place_axis = None
+        self._draw_opening = False
+        self._paint_mode = False
+        self._show_colors = True
+        self._marquee_origin = None
+        self._marquee_item = None
         self._bands = []
+        self._openings = []
+        self._regions = []
         self._panning = False
 
         self._scene.selectionChanged.connect(self._on_scene_selection_changed)
 
     def set_place_axis(self, axis) -> None:
         self._place_axis = axis
-        if axis is None:
-            self.viewport().unsetCursor()
-        elif axis == AXIS_HORIZONTAL:
-            self.viewport().setCursor(QtCore.Qt.SizeVerCursor)
-        else:
-            self.viewport().setCursor(QtCore.Qt.SizeHorCursor)
+        self._draw_opening = False
+        self._paint_mode = False
+        self._update_cursor()
 
-    def draw_panel(self, data: dict, selected_index: int = -1, fit: bool = False) -> None:
+    def set_draw_opening(self, enabled: bool) -> None:
+        self._draw_opening = enabled
+        self._place_axis = None
+        if enabled:
+            self._paint_mode = False
+        self._update_cursor()
+
+    def set_paint_mode(self, enabled: bool) -> None:
+        self._paint_mode = enabled
+        if enabled:
+            self._place_axis = None
+            self._draw_opening = False
+        self._update_cursor()
+
+    def set_show_colors(self, enabled: bool) -> None:
+        self._show_colors = enabled
+
+    def _update_cursor(self) -> None:
+        if self._draw_opening:
+            self.viewport().setCursor(QtCore.Qt.CrossCursor)
+        elif self._paint_mode:
+            self.viewport().setCursor(QtCore.Qt.PointingHandCursor)
+        elif self._place_axis == AXIS_HORIZONTAL:
+            self.viewport().setCursor(QtCore.Qt.SizeVerCursor)
+        elif self._place_axis == AXIS_VERTICAL:
+            self.viewport().setCursor(QtCore.Qt.SizeHorCursor)
+        else:
+            self.viewport().unsetCursor()
+
+    def draw_panel(self, data: dict, sel_kind: int = SEL_NONE, sel_index: int = -1, fit: bool = False) -> None:
         self._scene.blockSignals(True)
         self._scene.clear()
         self._bands = []
+        self._openings = []
+        self._regions = []
+        self._marquee_item = None
 
         width = max(data["width"], 1.0e-3)
         height = max(data["height"], 1.0e-3)
@@ -226,11 +456,20 @@ class PanelCanvas(QtWidgets.QGraphicsView):
         outline.setFlag(QtWidgets.QGraphicsItem.ItemIsSelectable, False)
         self._scene.addItem(outline)
 
+        colors = data.get("panelColors") or []
+        for reg in data.get("regions", []):
+            rid = reg["id"]
+            rgb = colors[rid] if rid < len(colors) else (0.55, 0.55, 0.55)
+            item = RegionItem(
+                rid, reg["x"], reg["z"], reg["w"], reg["h"], width, height, rgb, self._show_colors
+            )
+            self._scene.addItem(item)
+            self._regions.append(item)
+
         edge_pen = QtGui.QPen(QtGui.QColor(120, 180, 255, 180), 0.0, QtCore.Qt.DashLine)
         edge_brush = QtGui.QBrush(QtGui.QColor(120, 180, 255, 40))
 
         if data["edgeSides"]:
-            # Edge strips at panel X=0 and X=width (half-width), mapped through flipped X.
             for panel_left, panel_right in ((0.0, half_gw), (width - half_gw, width)):
                 sx0 = _scene_x(width, panel_right)
                 sx1 = _scene_x(width, panel_left)
@@ -252,11 +491,18 @@ class PanelCanvas(QtWidgets.QGraphicsView):
                 band.setFlag(QtWidgets.QGraphicsItem.ItemIsSelectable, False)
                 self._scene.addItem(band)
 
+        for i, op in enumerate(data.get("openings", [])):
+            item = OpeningItem(i, op["x"], op["z"], op["w"], op["h"], width, height)
+            self._scene.addItem(item)
+            self._openings.append(item)
+            if sel_kind == SEL_OPENING and i == sel_index:
+                item.setSelected(True)
+
         for i, reveal in enumerate(data["reveals"]):
             item = RevealBandItem(i, reveal["axis"], reveal["pos"], width, height, gw)
             self._scene.addItem(item)
             self._bands.append(item)
-            if i == selected_index:
+            if sel_kind == SEL_REVEAL and i == sel_index:
                 item.setSelected(True)
 
         self.setSceneRect(-gw, -gw, width + 2.0 * gw, height + 2.0 * gw)
@@ -269,17 +515,35 @@ class PanelCanvas(QtWidgets.QGraphicsView):
         self._on_scene_selection_changed()
 
     def _on_scene_selection_changed(self) -> None:
-        selected = [b for b in self._bands if b.isSelected()]
+        selected = [i for i in self._scene.selectedItems()]
         if len(selected) == 1:
-            self.selectionChanged.emit(selected[0].reveal_index)
-        else:
-            self.selectionChanged.emit(-1)
+            item = selected[0]
+            if isinstance(item, RevealBandItem):
+                self.selectionChanged.emit(SEL_REVEAL, item.reveal_index)
+                return
+            if isinstance(item, OpeningItem):
+                self.selectionChanged.emit(SEL_OPENING, item.opening_index)
+                return
+        self.selectionChanged.emit(SEL_NONE, -1)
+
+    def _scene_to_panel(self, scene_pt: QtCore.QPointF) -> tuple[float, float]:
+        x = _panel_x(self._panel_w, scene_pt.x())
+        z = self._panel_h - scene_pt.y()
+        return (x, z)
 
     def mousePressEvent(self, event) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self._draw_opening:
+            self._marquee_origin = self.mapToScene(event.pos())
+            self._marquee_item = QtWidgets.QGraphicsRectItem()
+            self._marquee_item.setPen(QtGui.QPen(QtGui.QColor(120, 220, 255), 0.0, QtCore.Qt.DashLine))
+            self._marquee_item.setBrush(QtGui.QBrush(QtGui.QColor(80, 160, 220, 40)))
+            self._marquee_item.setZValue(20.0)
+            self._scene.addItem(self._marquee_item)
+            event.accept()
+            return
         if event.button() == QtCore.Qt.LeftButton and self._place_axis is not None:
             scene_pt = self.mapToScene(event.pos())
-            z = _clamp(self._panel_h - scene_pt.y(), 0.0, self._panel_h)
-            x = _clamp(_panel_x(self._panel_w, scene_pt.x()), 0.0, self._panel_w)
+            x, z = self._scene_to_panel(scene_pt)
             self.placeRequested.emit(x, z)
             event.accept()
             return
@@ -292,6 +556,12 @@ class PanelCanvas(QtWidgets.QGraphicsView):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
+        if self._draw_opening and self._marquee_origin is not None and self._marquee_item is not None:
+            cur = self.mapToScene(event.pos())
+            rect = QtCore.QRectF(self._marquee_origin, cur).normalized()
+            self._marquee_item.setRect(rect)
+            event.accept()
+            return
         if self._panning:
             delta = event.pos() - self._pan_last
             self._pan_last = event.pos()
@@ -302,9 +572,28 @@ class PanelCanvas(QtWidgets.QGraphicsView):
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self._draw_opening and self._marquee_origin is not None:
+            cur = self.mapToScene(event.pos())
+            rect = QtCore.QRectF(self._marquee_origin, cur).normalized()
+            if self._marquee_item is not None:
+                self._scene.removeItem(self._marquee_item)
+                self._marquee_item = None
+            self._marquee_origin = None
+            if rect.width() > 1.0e-3 and rect.height() > 1.0e-3:
+                x0 = _panel_x(self._panel_w, rect.right())
+                x1 = _panel_x(self._panel_w, rect.left())
+                z0 = self._panel_h - rect.bottom()
+                z1 = self._panel_h - rect.top()
+                x = min(x0, x1)
+                z = min(z0, z1)
+                w = abs(x1 - x0)
+                h = abs(z1 - z0)
+                self.openingDrawn.emit(x, z, w, h)
+            event.accept()
+            return
         if event.button() == QtCore.Qt.MiddleButton and self._panning:
             self._panning = False
-            self.viewport().unsetCursor()
+            self._update_cursor()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -325,11 +614,12 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
 
         self._node = node
         self._loading = False
-        self._selected = -1
+        self._sel_kind = SEL_NONE
+        self._sel_index = -1
         self._data = None
 
         self.setWindowTitle(f"TiltUp Reveal Layout — {node.name}")
-        self.resize(820, 600)
+        self.resize(860, 640)
 
         self._canvas = PanelCanvas()
         self._status = QtWidgets.QLabel()
@@ -338,11 +628,18 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         self._width = WorldUnitSpinBox()
         self._height = WorldUnitSpinBox()
         self._depth = WorldUnitSpinBox()
+        self._width.setRange(0.0, 1.0e30)
+        self._height.setRange(0.0, 1.0e30)
+        self._depth.setRange(0.0, 1.0e30)
         self._groove_w = WorldUnitSpinBox()
         self._groove_d = WorldUnitSpinBox()
+        self._groove_w.setRange(0.0, 1.0e30)
+        self._groove_d.setRange(0.0, 1.0e30)
         self._edge_sides = QtWidgets.QCheckBox("Inset L/R")
         self._edge_topbot = QtWidgets.QCheckBox("Inset T/B")
+
         self._pos_spin = WorldUnitSpinBox()
+        self._pos_spin.setRange(0.0, 1.0e30)
         self._pos_spin.setEnabled(False)
         self._pct_spin = QtWidgets.QDoubleSpinBox()
         self._pct_spin.setRange(0.0, 100.0)
@@ -352,10 +649,61 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         self._pct_spin.setKeyboardTracking(False)
         self._pct_spin.setEnabled(False)
 
+        self._open_left = WorldUnitSpinBox()
+        self._open_right = WorldUnitSpinBox()
+        self._open_bottom = WorldUnitSpinBox()
+        self._open_top = WorldUnitSpinBox()
+        self._open_left_pct = self._make_pct_spin()
+        self._open_right_pct = self._make_pct_spin()
+        self._open_bottom_pct = self._make_pct_spin()
+        self._open_top_pct = self._make_pct_spin()
+        self._open_edge_spins = (
+            self._open_left,
+            self._open_right,
+            self._open_bottom,
+            self._open_top,
+            self._open_left_pct,
+            self._open_right_pct,
+            self._open_bottom_pct,
+            self._open_top_pct,
+        )
+        for s in self._open_edge_spins:
+            s.setEnabled(False)
+
         self._btn_add_h = QtWidgets.QPushButton("Add Horiz")
         self._btn_add_v = QtWidgets.QPushButton("Add Vert")
         self._btn_place_h = QtWidgets.QPushButton("Place Horiz…")
         self._btn_place_v = QtWidgets.QPushButton("Place Vert…")
+        self._btn_draw_open = QtWidgets.QPushButton("Draw Opening…")
+        self._btn_paint = QtWidgets.QPushButton("Paint Fill…")
+        self._btn_paint.setCheckable(True)
+        self._show_colors = QtWidgets.QCheckBox("Show colors in editor")
+        self._show_colors.setChecked(True)
+        self._btn_pick_color = QtWidgets.QPushButton("Pick Color…")
+        self._active_color = QtGui.QColor(180, 180, 180)
+        self._swatches = []
+        default_swatches = [
+            QtGui.QColor(220, 220, 220),
+            QtGui.QColor(180, 180, 180),
+            QtGui.QColor(140, 140, 140),
+            QtGui.QColor(200, 170, 140),
+            QtGui.QColor(160, 180, 200),
+            QtGui.QColor(170, 190, 150),
+            QtGui.QColor(210, 160, 160),
+            QtGui.QColor(120, 120, 130),
+        ]
+        swatch_row = QtWidgets.QHBoxLayout()
+        for i, col in enumerate(default_swatches):
+            btn = QtWidgets.QToolButton()
+            btn.setFixedSize(22, 22)
+            btn.setStyleSheet(
+                f"background-color: {col.name()}; border: 1px solid #888; border-radius: 2px;"
+            )
+            btn.clicked.connect(lambda _=False, c=col: self._set_active_color(c))
+            self._swatches.append(btn)
+            swatch_row.addWidget(btn)
+        swatch_row.addStretch(1)
+
         self._btn_remove = QtWidgets.QPushButton("Remove")
         self._btn_refresh = QtWidgets.QPushButton("Refresh")
         self._btn_remove.setEnabled(False)
@@ -375,10 +723,22 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         self._edge_topbot.toggled.connect(self._on_edge_changed)
         self._pos_spin.valueChanged.connect(self._on_pos_changed)
         self._pct_spin.valueChanged.connect(self._on_pct_changed)
+        self._open_left.valueChanged.connect(lambda _v: self._on_opening_edge_pos("left"))
+        self._open_right.valueChanged.connect(lambda _v: self._on_opening_edge_pos("right"))
+        self._open_bottom.valueChanged.connect(lambda _v: self._on_opening_edge_pos("bottom"))
+        self._open_top.valueChanged.connect(lambda _v: self._on_opening_edge_pos("top"))
+        self._open_left_pct.valueChanged.connect(lambda _v: self._on_opening_edge_pct("left"))
+        self._open_right_pct.valueChanged.connect(lambda _v: self._on_opening_edge_pct("right"))
+        self._open_bottom_pct.valueChanged.connect(lambda _v: self._on_opening_edge_pct("bottom"))
+        self._open_top_pct.valueChanged.connect(lambda _v: self._on_opening_edge_pct("top"))
         self._btn_add_h.clicked.connect(lambda: self._add_reveal(AXIS_HORIZONTAL))
         self._btn_add_v.clicked.connect(lambda: self._add_reveal(AXIS_VERTICAL))
         self._btn_place_h.clicked.connect(lambda: self._begin_place(AXIS_HORIZONTAL))
         self._btn_place_v.clicked.connect(lambda: self._begin_place(AXIS_VERTICAL))
+        self._btn_draw_open.clicked.connect(self._begin_draw_opening)
+        self._btn_paint.toggled.connect(self._on_paint_toggled)
+        self._show_colors.toggled.connect(self._on_show_colors_toggled)
+        self._btn_pick_color.clicked.connect(self._pick_color)
         self._btn_remove.clicked.connect(self._remove_selected)
         self._btn_refresh.clicked.connect(lambda: self.reload_from_node(fit=False))
         self._btn_pct_25.clicked.connect(lambda: self._set_pct(25.0))
@@ -386,8 +746,11 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         self._btn_pct_75.clicked.connect(lambda: self._set_pct(75.0))
 
         self._canvas.selectionChanged.connect(self._on_canvas_selection)
-        self._canvas.bandMoved.connect(self._on_band_moved)
+        self._canvas.revealMoved.connect(self._on_reveal_moved)
+        self._canvas.openingMoved.connect(self._on_opening_moved)
+        self._canvas.openingDrawn.connect(self._on_opening_drawn)
         self._canvas.placeRequested.connect(self._on_place_at)
+        self._canvas.regionPainted.connect(self._on_region_painted)
 
         form = QtWidgets.QFormLayout()
         form.addRow("Width", self._width)
@@ -397,8 +760,12 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         form.addRow("Groove D", self._groove_d)
         form.addRow(self._edge_sides)
         form.addRow(self._edge_topbot)
-        form.addRow("Position", self._pos_spin)
-        form.addRow("Percent", self._pct_spin)
+        form.addRow("Reveal Pos", self._pos_spin)
+        form.addRow("Reveal %", self._pct_spin)
+        form.addRow("X Left", self._edge_row(self._open_left, self._open_left_pct))
+        form.addRow("X Right", self._edge_row(self._open_right, self._open_right_pct))
+        form.addRow("Z Bottom", self._edge_row(self._open_bottom, self._open_bottom_pct))
+        form.addRow("Z Top", self._edge_row(self._open_top, self._open_top_pct))
 
         pct_row = QtWidgets.QHBoxLayout()
         pct_row.addWidget(self._btn_pct_25)
@@ -418,16 +785,45 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         side.addLayout(pct_row)
         side.addLayout(add_row)
         side.addLayout(place_row)
+        side.addWidget(self._btn_draw_open)
+        side.addWidget(self._btn_paint)
+        side.addWidget(self._show_colors)
+        side.addWidget(self._btn_pick_color)
+        side.addLayout(swatch_row)
         side.addWidget(self._btn_remove)
         side.addWidget(self._btn_refresh)
         side.addStretch(1)
         side.addWidget(self._status)
 
+        self._update_color_button()
         layout = QtWidgets.QHBoxLayout(self)
         layout.addWidget(self._canvas, stretch=1)
         layout.addLayout(side)
 
         self.reload_from_node(fit=True)
+
+    @staticmethod
+    def _make_pct_spin() -> QtWidgets.QDoubleSpinBox:
+        spin = QtWidgets.QDoubleSpinBox()
+        spin.setRange(0.0, 100.0)
+        spin.setDecimals(2)
+        spin.setSingleStep(1.0)
+        spin.setSuffix(" %")
+        spin.setKeyboardTracking(False)
+        spin.setMinimumWidth(88)
+        spin.setMaximumWidth(100)
+        return spin
+
+    @staticmethod
+    def _edge_row(pos_spin: QtWidgets.QWidget, pct_spin: QtWidgets.QWidget) -> QtWidgets.QWidget:
+        pos_spin.setMaximumWidth(110)
+        pos_spin.setMinimumWidth(80)
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(pos_spin, stretch=1)
+        layout.addWidget(pct_spin)
+        return row
 
     def reload_from_node(self, fit: bool = False) -> None:
         if not self._node or not rt.isValidNode(self._node):
@@ -440,6 +836,8 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         self._loading = True
         try:
             data = read_panel(self._node)
+            data["panelColors"] = ensure_panel_colors(self._node)
+            data["regions"] = list_regions(data)
             self._data = data
             self._width.setValue(data["width"])
             self._height.setValue(data["height"])
@@ -449,51 +847,83 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
             self._edge_sides.setChecked(data["edgeSides"])
             self._edge_topbot.setChecked(data["edgeTopBot"])
 
-            if self._selected >= len(data["reveals"]):
-                self._selected = len(data["reveals"]) - 1
+            if self._sel_kind == SEL_REVEAL and self._sel_index >= len(data["reveals"]):
+                self._sel_index = len(data["reveals"]) - 1
+                if self._sel_index < 0:
+                    self._sel_kind = SEL_NONE
+            if self._sel_kind == SEL_OPENING and self._sel_index >= len(data["openings"]):
+                self._sel_index = len(data["openings"]) - 1
+                if self._sel_index < 0:
+                    self._sel_kind = SEL_NONE
 
-            self._canvas.draw_panel(data, selected_index=self._selected, fit=fit)
-            self._sync_pos_controls()
-            place = self._canvas._place_axis
-            place_txt = ""
-            if place == AXIS_HORIZONTAL:
-                place_txt = "  |  click to place H"
-            elif place == AXIS_VERTICAL:
-                place_txt = "  |  click to place V"
+            self._canvas.set_show_colors(self._show_colors.isChecked())
+            self._canvas.draw_panel(
+                data,
+                sel_kind=self._sel_kind,
+                sel_index=self._sel_index,
+                fit=fit,
+            )
+            self._sync_selection_controls()
+            mode = ""
+            if self._canvas._paint_mode:
+                mode = "  |  click a subpanel to fill"
+            elif self._canvas._draw_opening:
+                mode = "  |  drag marquee for opening"
+            elif self._canvas._place_axis == AXIS_HORIZONTAL:
+                mode = "  |  click to place H"
+            elif self._canvas._place_axis == AXIS_VERTICAL:
+                mode = "  |  click to place V"
             self._status.setText(
                 f"{rt.units.formatValue(data['width'])} × {rt.units.formatValue(data['height'])}  |  "
-                f"{len(data['reveals'])} reveal(s)  |  front view (+X left)  |  "
-                f"drag · MMB pan · wheel zoom{place_txt}"
+                f"{len(data['reveals'])} reveal(s), {len(data['openings'])} opening(s), "
+                f"{len(data['regions'])} panel(s){mode}"
             )
         finally:
             self._loading = False
 
-    def _selected_limit(self) -> float:
-        reveal = self._data["reveals"][self._selected]
-        return self._data["height"] if reveal["axis"] == AXIS_HORIZONTAL else self._data["width"]
-
-    def _sync_pos_controls(self) -> None:
-        has = self._data is not None and 0 <= self._selected < len(self._data["reveals"])
-        self._pos_spin.setEnabled(has)
-        self._pct_spin.setEnabled(has)
-        self._btn_remove.setEnabled(has)
+    def _sync_selection_controls(self) -> None:
+        is_rev = self._sel_kind == SEL_REVEAL and self._data and 0 <= self._sel_index < len(self._data["reveals"])
+        is_op = self._sel_kind == SEL_OPENING and self._data and 0 <= self._sel_index < len(self._data["openings"])
+        self._pos_spin.setEnabled(bool(is_rev))
+        self._pct_spin.setEnabled(bool(is_rev))
         for b in (self._btn_pct_25, self._btn_pct_50, self._btn_pct_75):
-            b.setEnabled(has)
-        if not has:
-            return
-        reveal = self._data["reveals"][self._selected]
-        limit = max(self._selected_limit(), 1.0e-6)
-        self._pos_spin.setRange(0.0, limit)
-        self._pos_spin.setValue(reveal["pos"])
-        self._pct_spin.setValue(100.0 * reveal["pos"] / limit)
+            b.setEnabled(bool(is_rev))
+        for s in self._open_edge_spins:
+            s.setEnabled(bool(is_op))
+        self._btn_remove.setEnabled(bool(is_rev or is_op))
 
-    def _on_canvas_selection(self, index: int) -> None:
+        if is_rev:
+            reveal = self._data["reveals"][self._sel_index]
+            limit = self._data["height"] if reveal["axis"] == AXIS_HORIZONTAL else self._data["width"]
+            limit = max(limit, 1.0e-6)
+            self._pos_spin.setRange(0.0, limit)
+            self._pos_spin.setValue(reveal["pos"])
+            self._pct_spin.setValue(100.0 * reveal["pos"] / limit)
+        if is_op:
+            op = self._data["openings"][self._sel_index]
+            width = max(self._data["width"], 1.0e-6)
+            height = max(self._data["height"], 1.0e-6)
+            left = op["x"]
+            right = op["x"] + op["w"]
+            bottom = op["z"]
+            top = op["z"] + op["h"]
+            self._open_left.setValue(left)
+            self._open_right.setValue(right)
+            self._open_bottom.setValue(bottom)
+            self._open_top.setValue(top)
+            self._open_left_pct.setValue(100.0 * left / width)
+            self._open_right_pct.setValue(100.0 * right / width)
+            self._open_bottom_pct.setValue(100.0 * bottom / height)
+            self._open_top_pct.setValue(100.0 * top / height)
+
+    def _on_canvas_selection(self, kind: int, index: int) -> None:
         if self._loading:
             return
-        self._selected = index
+        self._sel_kind = kind
+        self._sel_index = index
         self._loading = True
         try:
-            self._sync_pos_controls()
+            self._sync_selection_controls()
         finally:
             self._loading = False
 
@@ -528,46 +958,155 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
         )
         self.reload_from_node(fit=False)
 
-    def _write_selected_pos(self, pos: float) -> None:
-        if self._selected < 0:
+    def _write_selected_reveal_pos(self, pos: float) -> None:
+        if self._sel_kind != SEL_REVEAL or self._sel_index < 0 or not self._data:
             return
-        limit = self._selected_limit() if self._data else pos
+        reveal = self._data["reveals"][self._sel_index]
+        limit = self._data["height"] if reveal["axis"] == AXIS_HORIZONTAL else self._data["width"]
         pos = _clamp(float(pos), 0.0, max(limit, 0.0))
-        write_reveal_pos(self._node, self._selected, pos)
+        write_reveal_pos(self._node, self._sel_index, pos)
         self.reload_from_node(fit=False)
 
     def _on_pos_changed(self, value: float) -> None:
-        if self._loading or self._selected < 0:
+        if self._loading:
             return
-        self._write_selected_pos(value)
+        self._write_selected_reveal_pos(value)
 
     def _on_pct_changed(self, value: float) -> None:
-        if self._loading or self._selected < 0 or not self._data:
+        if self._loading or self._sel_kind != SEL_REVEAL or not self._data:
             return
-        limit = self._selected_limit()
-        self._write_selected_pos(limit * float(value) / 100.0)
+        reveal = self._data["reveals"][self._sel_index]
+        limit = self._data["height"] if reveal["axis"] == AXIS_HORIZONTAL else self._data["width"]
+        self._write_selected_reveal_pos(limit * float(value) / 100.0)
 
     def _set_pct(self, pct: float) -> None:
-        if self._selected < 0:
+        if self._sel_kind != SEL_REVEAL:
             return
         self._pct_spin.setValue(pct)
 
-    def _on_band_moved(self, index: int, pos: float) -> None:
+    def _on_reveal_moved(self, index: int, pos: float) -> None:
         if self._loading:
             return
-        self._selected = index
+        self._sel_kind = SEL_REVEAL
+        self._sel_index = index
         write_reveal_pos(self._node, index, float(pos))
+        self.reload_from_node(fit=False)
+
+    def _opening_edges(self) -> tuple[float, float, float, float]:
+        """Return left, right, bottom, top from current opening selection."""
+        op = self._data["openings"][self._sel_index]
+        return (op["x"], op["x"] + op["w"], op["z"], op["z"] + op["h"])
+
+    def _commit_opening_edges(self, left: float, right: float, bottom: float, top: float) -> None:
+        min_size = 1.0e-4
+        if right < left + min_size:
+            right = left + min_size
+        if top < bottom + min_size:
+            top = bottom + min_size
+        write_opening(
+            self._node,
+            self._sel_index,
+            left,
+            bottom,
+            right - left,
+            top - bottom,
+        )
+        self.reload_from_node(fit=False)
+
+    def _on_opening_edge_pos(self, edge: str) -> None:
+        if self._loading or self._sel_kind != SEL_OPENING or self._sel_index < 0 or not self._data:
+            return
+        left, right, bottom, top = self._opening_edges()
+        if edge == "left":
+            left = self._open_left.value()
+        elif edge == "right":
+            right = self._open_right.value()
+        elif edge == "bottom":
+            bottom = self._open_bottom.value()
+        elif edge == "top":
+            top = self._open_top.value()
+        self._commit_opening_edges(left, right, bottom, top)
+
+    def _on_opening_edge_pct(self, edge: str) -> None:
+        if self._loading or self._sel_kind != SEL_OPENING or self._sel_index < 0 or not self._data:
+            return
+        width = max(self._data["width"], 1.0e-6)
+        height = max(self._data["height"], 1.0e-6)
+        left, right, bottom, top = self._opening_edges()
+        if edge == "left":
+            left = width * self._open_left_pct.value() / 100.0
+        elif edge == "right":
+            right = width * self._open_right_pct.value() / 100.0
+        elif edge == "bottom":
+            bottom = height * self._open_bottom_pct.value() / 100.0
+        elif edge == "top":
+            top = height * self._open_top_pct.value() / 100.0
+        self._commit_opening_edges(left, right, bottom, top)
+
+    def _on_opening_moved(self, index: int, x: float, z: float, w: float, h: float) -> None:
+        if self._loading:
+            return
+        self._sel_kind = SEL_OPENING
+        self._sel_index = index
+        write_opening(self._node, index, x, z, w, h)
+        self.reload_from_node(fit=False)
+
+    def _on_opening_drawn(self, x: float, z: float, w: float, h: float) -> None:
+        self._canvas.set_draw_opening(False)
+        self._sel_kind = SEL_OPENING
+        self._sel_index = add_opening(self._node, x, z, w, h)
         self.reload_from_node(fit=False)
 
     def _add_reveal(self, axis: int) -> None:
         self._canvas.set_place_axis(None)
-        self._selected = add_reveal(self._node, axis)
+        self._canvas.set_draw_opening(False)
+        self._sel_kind = SEL_REVEAL
+        self._sel_index = add_reveal(self._node, axis)
         self.reload_from_node(fit=False)
 
     def _begin_place(self, axis: int) -> None:
+        self._canvas.set_draw_opening(False)
         self._canvas.set_place_axis(axis)
         label = "H" if axis == AXIS_HORIZONTAL else "V"
         self._status.setText(f"Click canvas to place {label} reveal (Esc cancels)")
+
+    def _begin_draw_opening(self) -> None:
+        self._btn_paint.setChecked(False)
+        self._canvas.set_place_axis(None)
+        self._canvas.set_draw_opening(True)
+        self._status.setText("Drag a rectangle for the opening (Esc cancels)")
+
+    def _on_paint_toggled(self, checked: bool) -> None:
+        self._canvas.set_paint_mode(checked)
+        if checked:
+            self._status.setText("Paint mode: click a subpanel to fill with the active color")
+        else:
+            self.reload_from_node(fit=False)
+
+    def _on_show_colors_toggled(self, checked: bool) -> None:
+        self._canvas.set_show_colors(checked)
+        self.reload_from_node(fit=False)
+
+    def _set_active_color(self, color: QtGui.QColor) -> None:
+        self._active_color = QtGui.QColor(color)
+        self._update_color_button()
+
+    def _update_color_button(self) -> None:
+        c = self._active_color
+        self._btn_pick_color.setStyleSheet(
+            f"background-color: {c.name()}; color: {'#000' if c.lightness() > 140 else '#fff'};"
+        )
+
+    def _pick_color(self) -> None:
+        color = QtWidgets.QColorDialog.getColor(self._active_color, self, "Panel Color")
+        if color.isValid():
+            self._set_active_color(color)
+
+    def _on_region_painted(self, region_id: int) -> None:
+        c = self._active_color
+        rgb = (c.redF(), c.greenF(), c.blueF())
+        write_panel_color(self._node, region_id, rgb)
+        self.reload_from_node(fit=False)
 
     def _on_place_at(self, x: float, z: float) -> None:
         axis = self._canvas._place_axis
@@ -575,20 +1114,29 @@ class TiltUpPanelEditorWindow(QtWidgets.QWidget):
             return
         pos = z if axis == AXIS_HORIZONTAL else x
         self._canvas.set_place_axis(None)
-        self._selected = add_reveal(self._node, axis, pos)
+        self._sel_kind = SEL_REVEAL
+        self._sel_index = add_reveal(self._node, axis, pos)
         self.reload_from_node(fit=False)
 
     def _remove_selected(self) -> None:
-        if self._selected < 0:
+        if self._sel_kind == SEL_REVEAL and self._sel_index >= 0:
+            remove_reveal(self._node, self._sel_index)
+        elif self._sel_kind == SEL_OPENING and self._sel_index >= 0:
+            remove_opening(self._node, self._sel_index)
+        else:
             return
-        remove_reveal(self._node, self._selected)
-        self._selected = -1
+        self._sel_kind = SEL_NONE
+        self._sel_index = -1
         self._canvas.set_place_axis(None)
+        self._canvas.set_draw_opening(False)
         self.reload_from_node(fit=False)
 
     def keyPressEvent(self, event) -> None:
         if event.key() == QtCore.Qt.Key_Escape:
             self._canvas.set_place_axis(None)
+            self._canvas.set_draw_opening(False)
+            self._btn_paint.setChecked(False)
+            self._canvas.set_paint_mode(False)
             self.reload_from_node(fit=False)
             return
         if event.key() in (QtCore.Qt.Key_Delete, QtCore.Qt.Key_Backspace):
